@@ -1,0 +1,433 @@
+{% extends "base.html" %}
+{% block title %}TestCraft — 执行测试{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0"><i class="bi bi-play-fill me-2"></i>执行自动测试</h2>
+    <a href="{{ url_for('results') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i>返回结果
+    </a>
+</div>
+
+<!-- Progress Bar -->
+<div class="mb-3 d-none" id="progressBar">
+    <div class="d-flex justify-content-between mb-1">
+        <small id="progressLabel" class="text-muted">准备中...</small>
+        <small id="progressStats" class="text-muted">0/0</small>
+    </div>
+    <div class="progress" style="height: 6px;">
+        <div class="progress-bar bg-success" id="progressPass" style="width: 0%"></div>
+        <div class="progress-bar bg-danger" id="progressFail" style="width: 0%"></div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Left: Config -->
+    <div class="col-lg-5">
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-body">
+                <h5 class="card-title mb-3">1. 配置代码路径</h5>
+
+                <div class="mb-3">
+                    <label class="form-label d-flex justify-content-between align-items-center">
+                        <span>被测代码路径</span>
+                        <button class="btn btn-sm btn-outline-light" onclick="addCodePath()">
+                            <i class="bi bi-plus me-1"></i>添加
+                        </button>
+                    </label>
+                    <div id="codePathList">
+                        <div class="input-group mb-2 code-path-row">
+                            <span class="input-group-text bg-secondary border-secondary text-light">前端</span>
+                            <input type="text" class="form-control code-path-input" placeholder="如 /Users/xxx/project/frontend">
+                            <button class="btn btn-outline-danger" onclick="this.closest('.code-path-row').remove()"><i class="bi bi-x"></i></button>
+                        </div>
+                        <div class="input-group mb-2 code-path-row">
+                            <span class="input-group-text bg-secondary border-secondary text-light">后端</span>
+                            <input type="text" class="form-control code-path-input" placeholder="如 /Users/xxx/project/backend">
+                            <button class="btn btn-outline-danger" onclick="this.closest('.code-path-row').remove()"><i class="bi bi-x"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">或输入项目根目录</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="atProjectRoot" placeholder="如 /Users/xxx/project">
+                        <button class="btn btn-outline-info" onclick="detectProject()">
+                            <i class="bi bi-search me-1"></i>识别
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-body">
+                <h5 class="card-title mb-3">2. 生成并执行</h5>
+                <button class="btn btn-info w-100 mb-2" id="genScriptBtn" onclick="generateScripts()">
+                    <i class="bi bi-code-slash me-1"></i>AI 生成测试脚本
+                </button>
+
+                <!-- Single test filter -->
+                <div class="input-group mb-2 d-none" id="filterGroup">
+                    <span class="input-group-text bg-secondary border-secondary text-light"><i class="bi bi-funnel"></i></span>
+                    <input type="text" class="form-control" id="testFilter" placeholder="过滤用例 (如 TC-003 或 test_tc003)">
+                    <button class="btn btn-outline-secondary" onclick="document.getElementById('testFilter').value=''" title="清除过滤"><i class="bi bi-x"></i></button>
+                </div>
+
+                <button class="btn btn-warning w-100 mb-2" id="runBtn" onclick="runProject()" disabled>
+                    <i class="bi bi-play-fill me-1"></i>执行全部测试
+                </button>
+
+                <!-- Feishu report link -->
+                <a href="#" class="btn btn-outline-success w-100 d-none" id="feishuReportBtn" target="_blank">
+                    <i class="bi bi-file-earmark-text me-1"></i>查看飞书报告
+                </a>
+            </div>
+        </div>
+
+        <!-- Architecture Tree -->
+        <div class="card bg-dark border-secondary mb-3 d-none" id="archCard">
+            <div class="card-header border-secondary" style="cursor:pointer" onclick="document.getElementById('archBody').classList.toggle('d-none')">
+                <i class="bi bi-diagram-3 me-2"></i>项目架构 <small class="text-muted">(点击展开/收起)</small>
+            </div>
+            <div class="card-body p-0" id="archBody">
+                <pre class="bg-black text-success p-3 m-0 rounded-0" id="archTree" style="font-size: 12px; max-height: 300px; overflow-y: auto;"></pre>
+            </div>
+        </div>
+
+        <!-- Generated scripts list -->
+        <div class="card bg-dark border-secondary d-none" id="scriptsCard">
+            <div class="card-header border-secondary">
+                <i class="bi bi-file-code me-2"></i>生成的文件
+            </div>
+            <div class="list-group list-group-flush" id="scriptsList" style="max-height: 400px; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <!-- Right: Output -->
+    <div class="col-lg-7">
+        <div class="card bg-dark border-secondary h-100">
+            <div class="card-header border-secondary d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-terminal me-2"></i>输出</span>
+                <div>
+                    <span id="stepInfo" class="text-muted me-2" style="font-size: 12px;"></span>
+                    <span id="atStatus" class="badge bg-secondary">等待操作</span>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <pre id="atOutput" class="bg-black text-light p-3 m-0 rounded-0" style="height: calc(100vh - 300px); overflow-y: auto; font-size: 13px; line-height: 1.6;">准备就绪。请配置代码路径，然后点击「AI 生成测试脚本」。
+</pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const AUTOTEST_LOCAL = 'http://localhost:8000';
+    const AUTOTEST_PUBLIC = 'https://palmer-outlet-lakes-locate.trycloudflare.com';
+    function getAutotestBase() {
+        return location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+            ? AUTOTEST_LOCAL : AUTOTEST_PUBLIC;
+    }
+    function getAutotestWs() {
+        return getAutotestBase().replace('https://', 'wss://').replace('http://', 'ws://');
+    }
+
+    let pathCounter = 2;
+    let generatedScripts = [];
+    let projectDir = '';
+
+    function addCodePath() {
+        pathCounter++;
+        const div = document.createElement('div');
+        div.className = 'input-group mb-2 code-path-row';
+        div.innerHTML = `
+            <span class="input-group-text bg-secondary border-secondary text-light">路径${pathCounter}</span>
+            <input type="text" class="form-control code-path-input" placeholder="代码文件或文件夹路径">
+            <button class="btn btn-outline-danger" onclick="this.closest('.code-path-row').remove()"><i class="bi bi-x"></i></button>
+        `;
+        document.getElementById('codePathList').appendChild(div);
+    }
+
+    async function detectProject() {
+        const root = document.getElementById('atProjectRoot').value.trim();
+        if (!root) { alert('请输入项目根目录'); return; }
+        try {
+            const resp = await fetch('/api/detect-project', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({root}),
+            });
+            const data = await resp.json();
+            if (data.error) { alert(data.error); return; }
+            const list = document.getElementById('codePathList');
+            list.innerHTML = '';
+            data.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'input-group mb-2 code-path-row';
+                div.innerHTML = `
+                    <span class="input-group-text bg-secondary border-secondary text-light">${item.label} (${item.name})</span>
+                    <input type="text" class="form-control code-path-input" value="${item.path}">
+                    <button class="btn btn-outline-danger" onclick="this.closest('.code-path-row').remove()"><i class="bi bi-x"></i></button>
+                `;
+                list.appendChild(div);
+            });
+            if (!data.length) alert('未识别到前后端代码，请手动添加路径');
+        } catch(e) { alert('识别失败: ' + e.message); }
+    }
+
+    function getCodePaths() {
+        const paths = [];
+        document.querySelectorAll('.code-path-row').forEach(row => {
+            const path = row.querySelector('.code-path-input').value.trim();
+            const label = row.querySelector('.input-group-text')?.textContent || '未知';
+            if (path) paths.push({path, label});
+        });
+        return paths;
+    }
+
+    async function generateScripts() {
+        const codePaths = getCodePaths();
+        if (!codePaths.length) { alert('请至少添加一个代码路径'); return; }
+
+        const btn = document.getElementById('genScriptBtn');
+        const output = document.getElementById('atOutput');
+        const status = document.getElementById('atStatus');
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>AI 生成中...';
+        status.className = 'badge bg-warning';
+        status.textContent = '生成架构中';
+        output.textContent = '正在分析代码并生成完整测试架构，请稍候...\n（这可能需要 1-3 分钟）\n';
+
+        try {
+            const resp = await fetch('/api/generate-scripts', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({code_paths: codePaths}),
+            });
+            const data = await resp.json();
+            if (data.error) {
+                output.textContent += '\n错误: ' + data.error + '\n';
+                status.className = 'badge bg-danger';
+                status.textContent = '生成失败';
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-code-slash me-1"></i>AI 生成测试脚本';
+                return;
+            }
+
+            generatedScripts = data.scripts;
+            projectDir = data.project_dir || '';
+
+            // Show architecture
+            if (data.architecture) {
+                document.getElementById('archCard').classList.remove('d-none');
+                document.getElementById('archTree').textContent = data.architecture;
+            }
+
+            output.textContent += `\n生成完整测试项目 (${generatedScripts.length} 个文件):\n\n`;
+
+            // Categorize files
+            const configs = generatedScripts.filter(s => s.type === 'config');
+            const commons = generatedScripts.filter(s => s.type === 'common');
+            const tests = generatedScripts.filter(s => s.type === 'testcase');
+            const pages = generatedScripts.filter(s => s.type === 'page');
+
+            if (configs.length) {
+                output.textContent += `  配置文件 (${configs.length}):\n`;
+                configs.forEach(s => output.textContent += `    - ${s.filename}\n`);
+            }
+            if (commons.length) {
+                output.textContent += `  公共模块 (${commons.length}):\n`;
+                commons.forEach(s => output.textContent += `    - ${s.filename}\n`);
+            }
+            if (pages.length) {
+                output.textContent += `  页面对象 (${pages.length}):\n`;
+                pages.forEach(s => output.textContent += `    - ${s.filename}\n`);
+            }
+            if (tests.length) {
+                output.textContent += `  测试用例 (${tests.length}):\n`;
+                tests.forEach(s => output.textContent += `    - ${s.filename}\n`);
+            }
+
+            // Show scripts list
+            const card = document.getElementById('scriptsCard');
+            const list = document.getElementById('scriptsList');
+            card.classList.remove('d-none');
+            list.innerHTML = '';
+
+            const typeIcons = {config: 'bi-gear', common: 'bi-puzzle', testcase: 'bi-check2-square', page: 'bi-window'};
+            const typeBadges = {config: 'bg-secondary', common: 'bg-info', testcase: 'bg-warning', page: 'bg-primary'};
+
+            generatedScripts.forEach((s, i) => {
+                const icon = typeIcons[s.type] || 'bi-file-code';
+                const badge = typeBadges[s.type] || 'bg-info';
+                const item = document.createElement('a');
+                item.href = '#';
+                item.className = 'list-group-item list-group-item-action bg-dark text-light border-secondary d-flex justify-content-between align-items-center';
+                item.innerHTML = `
+                    <span><i class="bi ${icon} me-2"></i>${s.filename}</span>
+                    <span>
+                        <span class="badge ${badge} me-1">${s.type}</span>
+                        ${s.type === 'testcase' ? '<button class="btn btn-sm btn-outline-warning ms-1" onclick="event.preventDefault();event.stopPropagation();runSingle(\\''+s.filename+'\\')"><i class="bi bi-play-fill"></i></button>' : ''}
+                    </span>
+                `;
+                item.onclick = (e) => {
+                    e.preventDefault();
+                    output.textContent = `// ${s.filename}\n\n${s.content}`;
+                };
+                list.appendChild(item);
+            });
+
+            output.textContent += `\n项目目录: ${projectDir}\n`;
+            output.textContent += '\n点击文件名查看内容，或点击「执行全部测试」运行。\n';
+
+            status.className = 'badge bg-success';
+            status.textContent = '架构已生成';
+            document.getElementById('runBtn').disabled = false;
+            document.getElementById('filterGroup').classList.remove('d-none');
+        } catch(e) {
+            output.textContent += '\n请求失败: ' + e.message + '\n';
+            status.className = 'badge bg-danger';
+            status.textContent = '生成失败';
+        }
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-code-slash me-1"></i>AI 生成测试脚本';
+    }
+
+    function runSingle(filename) {
+        // Extract test name from filename for -k filter
+        const name = filename.replace(/.*\//, '').replace('.py', '');
+        document.getElementById('testFilter').value = name;
+        runProject();
+    }
+
+    async function runProject() {
+        if (!projectDir) { alert('请先生成测试脚本'); return; }
+
+        const btn = document.getElementById('runBtn');
+        const output = document.getElementById('atOutput');
+        const status = document.getElementById('atStatus');
+        const stepInfo = document.getElementById('stepInfo');
+        const testFilter = document.getElementById('testFilter').value.trim();
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>执行中...';
+        status.className = 'badge bg-warning';
+        status.textContent = '执行中';
+        output.textContent = '';
+        stepInfo.textContent = '';
+
+        // Show progress bar
+        const progressDiv = document.getElementById('progressBar');
+        progressDiv.classList.remove('d-none');
+        document.getElementById('progressPass').style.width = '0%';
+        document.getElementById('progressFail').style.width = '0%';
+        document.getElementById('progressStats').textContent = '0/0';
+        document.getElementById('progressLabel').textContent = testFilter ? `过滤: ${testFilter}` : '执行中...';
+
+        // Hide old report
+        document.getElementById('feishuReportBtn').classList.add('d-none');
+
+        try {
+            // Create project run task
+            const resp = await fetch(getAutotestBase() + '/run-project', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    project_dir: projectDir,
+                    test_filter: testFilter,
+                }),
+            });
+            const data = await resp.json();
+            if (data.error) {
+                output.textContent += '错误: ' + data.error + '\n';
+                resetRunBtn();
+                return;
+            }
+
+            // WebSocket for live output
+            const wsUrl = getAutotestWs() + '/ws/run/' + data.task_id;
+            const ws = new WebSocket(wsUrl);
+            let totalTests = 0;
+
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+
+                if (msg.type === 'output') {
+                    output.textContent += msg.data;
+                    output.scrollTop = output.scrollHeight;
+                }
+                else if (msg.type === 'step') {
+                    stepInfo.textContent = `[${msg.test_id}] ${msg.step}`;
+                }
+                else if (msg.type === 'progress') {
+                    totalTests = msg.current;
+                    const total = msg.passed + msg.failed;
+                    const passW = total > 0 ? (msg.passed / total * 100) : 0;
+                    const failW = total > 0 ? (msg.failed / total * 100) : 0;
+                    document.getElementById('progressPass').style.width = passW + '%';
+                    document.getElementById('progressFail').style.width = failW + '%';
+                    document.getElementById('progressStats').textContent =
+                        `${msg.passed} 通过 / ${msg.failed} 失败 (共 ${total})`;
+                    document.getElementById('progressLabel').textContent =
+                        `执行进度: ${total} 个用例`;
+                }
+                else if (msg.type === 'done') {
+                    status.className = msg.passed ? 'badge bg-success' : 'badge bg-danger';
+                    status.textContent = msg.passed ? '全部通过' : '存在失败';
+                    stepInfo.textContent = `耗时: ${(msg.duration || 0).toFixed(1)}s`;
+
+                    // Show Feishu report link
+                    if (msg.feishu_url) {
+                        const reportBtn = document.getElementById('feishuReportBtn');
+                        reportBtn.href = msg.feishu_url;
+                        reportBtn.classList.remove('d-none');
+                    }
+                    resetRunBtn();
+                }
+                else if (msg.type === 'error') {
+                    output.textContent += '\n错误: ' + msg.data + '\n';
+                    status.className = 'badge bg-danger';
+                    status.textContent = '执行出错';
+                    resetRunBtn();
+                }
+            };
+
+            ws.onerror = () => {
+                output.textContent += '\nWebSocket 连接失败，请确认 autotest 服务运行中\n';
+                resetRunBtn();
+            };
+
+            ws.onclose = (e) => {
+                if (e.code !== 1000 && e.code !== 1005) {
+                    output.textContent += '\n连接已断开\n';
+                    resetRunBtn();
+                }
+            };
+
+            // 10 minute timeout
+            setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.close();
+                    output.textContent += '\n超时 (10 分钟)\n';
+                    resetRunBtn();
+                }
+            }, 600000);
+
+        } catch(e) {
+            output.textContent += '执行失败: ' + e.message + '\n';
+            resetRunBtn();
+        }
+    }
+
+    function resetRunBtn() {
+        const btn = document.getElementById('runBtn');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-play-fill me-1"></i>重新执行';
+    }
+</script>
+{% endblock %}

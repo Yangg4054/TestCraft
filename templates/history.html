@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}TestCraft — 历史记录{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-clock-history me-2"></i>历史测试用例</h2>
+
+{% if records %}
+<div class="table-responsive">
+    <table class="table table-hover align-middle">
+        <thead class="table-dark">
+            <tr>
+                <th>生成时间</th>
+                <th>用例数量</th>
+                <th>运行 ID</th>
+                <th style="width:120px">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in records %}
+            <tr>
+                <td>{{ r.time }}</td>
+                <td><span class="badge bg-primary">{{ r.count }} 条</span></td>
+                <td class="text-muted small">{{ r.run_id }}</td>
+                <td>
+                    <a href="{{ url_for('history_detail', run_id=r.run_id) }}" class="btn btn-sm btn-outline-light">
+                        <i class="bi bi-eye me-1"></i>查看
+                    </a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="text-center text-muted py-5">
+    <i class="bi bi-inbox fs-1 d-block mb-3"></i>
+    暂无历史记录，去<a href="{{ url_for('index') }}">生成测试用例</a>吧。
+</div>
+{% endif %}
+{% endblock %}

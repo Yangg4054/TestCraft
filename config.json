@@ -1,0 +1,9 @@
+{
+  "provider": "anthropic",
+  "base_url": "https://callapi.top",
+  "api_key": "sk-bc77aaDj0MVr5Ud1cDFwqZjYIa2rknm2rIHk4kHYb5LINLwc",
+  "model": "claude-sonnet-4-20250514",
+  "feishu_app_id": "cli_a93ab801a738dcb6",
+  "feishu_app_secret": "SbdbX9zfi4Qrz3jVa1VYVhEpu6uASbAD",
+  "feishu_domain": "https://open.feishu.cn"
+}

@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}TestCraft — 生成测试用例{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="text-center mb-4">
+            <h1 class="display-6 fw-bold">
+                <i class="bi bi-clipboard-check me-2"></i>TestCraft
+            </h1>
+            <p class="lead text-muted">上传需求文档和代码，AI 自动生成全面的测试用例。</p>
+        </div>
+
+        <form action="{{ url_for('generate') }}" method="POST" enctype="multipart/form-data" id="generateForm">
+            <!-- Requirements Document -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-file-earmark-text me-2"></i>需求文档
+                    <span class="text-danger">*</span>
+                </div>
+                <div class="card-body">
+                    <ul class="nav nav-tabs mb-3" role="tablist">
+                        <li class="nav-item">
+                            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#docUpload" type="button">
+                                <i class="bi bi-upload me-1"></i>上传文件
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#docFeishu" type="button">
+                                <i class="bi bi-cloud me-1"></i>飞书文档
+                            </button>
+                        </li>
+                    </ul>
+                    <div class="tab-content">
+                        <div class="tab-pane fade show active" id="docUpload">
+                            <div class="drop-zone" id="docDropZone">
+                                <i class="bi bi-cloud-arrow-up fs-1 text-muted"></i>
+                                <p class="mb-1">拖拽需求文档到此处</p>
+                                <p class="text-muted small mb-2">支持格式: .docx, .pdf, .md, .txt (最大 50 MB)</p>
+                                <input type="file" name="doc_file" id="docFile"
+                                       accept=".docx,.pdf,.md,.markdown,.txt" class="d-none">
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="document.getElementById('docFile').click()">
+                                    <i class="bi bi-folder2-open me-1"></i>浏览文件
+                                </button>
+                            </div>
+                            <div id="docFileName" class="mt-2 d-none">
+                                <span class="badge bg-primary"><i class="bi bi-file-earmark me-1"></i><span class="name"></span></span>
+                                <button type="button" class="btn btn-sm btn-link text-danger" onclick="clearFile('doc')">
+                                    <i class="bi bi-x-circle"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="docFeishu">
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="bi bi-link-45deg"></i></span>
+                                <input type="text" name="feishu_url" id="feishuUrl" class="form-control"
+                                       placeholder="https://xxx.feishu.cn/docx/ABC123 或 /wiki/ABC123">
+                            </div>
+                            <div class="form-text">粘贴飞书文档或知识库页面链接。需要先在 <a href="{{ url_for('configure') }}">配置</a> 中设置飞书应用凭证。</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Code Source -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-code-slash me-2"></i>项目源代码
+                    <span class="text-muted small ms-2">(可选)</span>
+                </div>
+                <div class="card-body">
+                    <ul class="nav nav-tabs mb-3" role="tablist">
+                        <li class="nav-item">
+                            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#codeUpload" type="button">
+                                <i class="bi bi-upload me-1"></i>上传 ZIP
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#codePath" type="button">
+                                <i class="bi bi-folder me-1"></i>本地路径
+                            </button>
+                        </li>
+                    </ul>
+                    <div class="tab-content">
+                        <div class="tab-pane fade show active" id="codeUpload">
+                            <div class="drop-zone" id="codeDropZone">
+                                <i class="bi bi-file-earmark-zip fs-1 text-muted"></i>
+                                <p class="mb-1">拖拽项目 ZIP 文件到此处</p>
+                                <p class="text-muted small mb-2">最大 50 MB</p>
+                                <input type="file" name="code_file" id="codeFile" accept=".zip" class="d-none">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('codeFile').click()">
+                                    <i class="bi bi-folder2-open me-1"></i>浏览文件
+                                </button>
+                            </div>
+                            <div id="codeFileName" class="mt-2 d-none">
+                                <span class="badge bg-secondary"><i class="bi bi-file-earmark-zip me-1"></i><span class="name"></span></span>
+                                <button type="button" class="btn btn-sm btn-link text-danger" onclick="clearFile('code')">
+                                    <i class="bi bi-x-circle"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="codePath">
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="bi bi-folder"></i></span>
+                                <input type="text" name="code_path" class="form-control"
+                                       placeholder="/path/to/your/project">
+                            </div>
+                            <div class="form-text">输入服务器上项目目录的绝对路径。</div>
+                        </div>
+                  </div>
+                </div>
+            </div>
+
+            <!-- Generate Button -->
+            <div class="d-grid">
+                <button type="submit" class="btn btn-primary btn-lg" id="generateBtn">
+                    <i class="bi bi-magic me-2"></i>生成测试用例
+                </button>
+            </div>
+        </form>
+
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay" class="d-none">
+            <div class="loading-content text-center py-5">
+                <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">
+                    <span class="visually-hidden">加载中...</span>
+                </div>
+                <h5>正在生成测试用例...</h5>
+                <p class="text-muted">正在分析需求文档和代码，通过 AI 生成全面的测试用例。</p>
+                <p class="text-muted small">根据文档大小，可能需要 30-60 秒。</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

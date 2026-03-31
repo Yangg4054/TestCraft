@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}TestCraft — 自动测试{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0"><i class="bi bi-play-circle me-2"></i>自动测试</h2>
+    <a id="atNewWindow" href="http://localhost:8000/" target="_blank" class="btn btn-sm btn-outline-light">
+        <i class="bi bi-box-arrow-up-right me-1"></i>新窗口打开
+    </a>
+</div>
+<div style="border-radius: 8px; overflow: hidden; border: 1px solid #333;">
+    <iframe id="atFrame" src="http://localhost:8000/" style="width: 100%; height: calc(100vh - 200px); border: none;"></iframe>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    if (!isLocal) {
+        const pub = 'https://palmer-outlet-lakes-locate.trycloudflare.com';
+        document.getElementById('atFrame').src = pub + '/';
+        document.getElementById('atNewWindow').href = pub + '/';
+    }
+</script>
+{% endblock %}

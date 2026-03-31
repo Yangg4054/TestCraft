@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}TestCraft — 测试结果{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div>
+        <h2 class="mb-0"><i class="bi bi-list-check me-2"></i>生成的测试用例</h2>
+        <span class="text-muted">共 {{ test_cases | length }} 条测试用例</span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('download', fmt='excel') }}" class="btn btn-success">
+            <i class="bi bi-file-earmark-spreadsheet me-1"></i>下载 Excel
+        </a>
+        <a href="{{ url_for('download', fmt='markdown') }}" class="btn btn-outline-primary">
+            <i class="bi bi-markdown me-1"></i>下载 Markdown
+        </a>
+        {% if feishu_doc_url %}
+        <a href="{{ feishu_doc_url }}" target="_blank" class="btn btn-primary">
+            <i class="bi bi-box-arrow-up-right me-1"></i>查看飞书文档
+        </a>
+        {% else %}
+        <button class="btn btn-primary" id="createFeishuBtn" onclick="createFeishuDoc()">
+            <i class="bi bi-file-earmark-plus me-1"></i>生成飞书文档
+        </button>
+        {% endif %}
+        <a href="{{ url_for('run_test') }}" class="btn btn-warning">
+            <i class="bi bi-play-fill me-1"></i>执行测试
+        </a>
+        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-repeat me-1"></i>重新生成
+        </a>
+    </div>
+</div>
+
+<!-- Priority summary -->
+<div class="row g-3 mb-4">
+    {% set ns = namespace(p0=0, p1=0, p2=0, p3=0) %}
+    {% for tc in test_cases %}
+        {% if tc.priority == 'P0' %}{% set ns.p0 = ns.p0 + 1 %}
+        {% elif tc.priority == 'P1' %}{% set ns.p1 = ns.p1 + 1 %}
+        {% elif tc.priority == 'P2' %}{% set ns.p2 = ns.p2 + 1 %}
+        {% elif tc.priority == 'P3' %}{% set ns.p3 = ns.p3 + 1 %}
+        {% endif %}
+    {% endfor %}
+    <div class="col-6 col-md-3">
+        <div class="card text-center border-danger">
+            <div class="card-body py-2">
+                <div class="fs-4 fw-bold text-danger">{{ ns.p0 }}</div>
+                <small class="text-muted">P0 严重</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center border-warning">
+            <div class="card-body py-2">
+                <div class="fs-4 fw-bold text-warning">{{ ns.p1 }}</div>
+                <small class="text-muted">P1 高</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center border-primary">
+            <div class="card-body py-2">
+                <div class="fs-4 fw-bold text-primary">{{ ns.p2 }}</div>
+                <small class="text-muted">P2 中</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center border-secondary">
+            <div class="card-body py-2">
+                <div class="fs-4 fw-bold text-secondary">{{ ns.p3 }}</div>
+                <small class="text-muted">P3 低</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div class="d-flex gap-2 mb-3 flex-wrap">
+    <button class="btn btn-sm btn-outline-light filter-btn active" data-filter="all">全部</button>
+    <button class="btn btn-sm btn-outline-danger filter-btn" data-filter="P0">P0</button>
+    <button class="btn btn-sm btn-outline-warning filter-btn" data-filter="P1">P1</button>
+    <button class="btn btn-sm btn-outline-primary filter-btn" data-filter="P2">P2</button>
+    <button class="btn btn-sm btn-outline-secondary filter-btn" data-filter="P3">P3</button>
+    <input type="text" id="searchInput" class="form-control form-control-sm ms-auto" style="max-width: 250px;" placeholder="搜索测试用例...">
+</div>
+
+<!-- Test cases table -->
+<div class="table-responsive">
+    <table class="table table-hover align-middle" id="testCaseTable">
+        <thead class="table-dark">
+            <tr>
+                <th style="width:70px">编号</th>
+                <th style="width:120px">模块</th>
+                <th>测试用例名称</th>
+                <th style="width:80px" class="text-center">优先级</th>
+                <th>前置条件</th>
+                <th>测试步骤</th>
+                <th>预期结果</th>
+                <th style="width:110px">类型</th>
+                <th style="width:90px">测试方法</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for tc in test_cases %}
+            <tr class="tc-row" data-priority="{{ tc.priority }}">
+                <td class="text-nowrap fw-semibold">{{ tc.id }}</td>
+                <td>{{ tc.module }}</td>
+                <td class="fw-semibold">{{ tc.name }}</td>
+                <td class="text-center">
+                    <span class="badge priority-{{ tc.priority | lower }}">{{ tc.priority }}</span>
+                </td>
+                <td class="small">{{ tc.preconditions }}</td>
+                <td class="small">{{ tc.steps }}</td>
+                <td class="small">{{ tc.expected_result }}</td>
+                <td><span class="badge bg-dark">{{ tc.type }}</span></td>
+                <td class="small text-muted">{{ tc.method or '' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Regenerate section -->
+<div class="card bg-dark border-secondary mt-4">
+    <div class="card-body">
+        <h5 class="card-title"><i class="bi bi-chat-dots me-2"></i>描述修改需求，重新生成</h5>
+        <div class="input-group">
+            <textarea class="form-control" id="regenFeedback" rows="2" placeholder="例如：增加更多边界值测试、补充并发场景、某个模块的用例不够详细..."></textarea>
+            <button class="btn btn-primary" id="regenBtn" onclick="regenerate()">
+                <i class="bi bi-arrow-clockwise me-1"></i>重新生成
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const filter = btn.dataset.filter;
+            document.querySelectorAll('.tc-row').forEach(row => {
+                row.style.display = (filter === 'all' || row.dataset.priority === filter) ? '' : 'none';
+            });
+        });
+    });
+    document.getElementById('searchInput').addEventListener('input', function() {
+        const q = this.value.toLowerCase();
+        document.querySelectorAll('.tc-row').forEach(row => {
+            row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+        });
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        document.querySelector('[data-filter="all"]').classList.add('active');
+    });
+
+    async function createFeishuDoc() {
+        const btn = document.getElementById('createFeishuBtn');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>生成中...';
+        try {
+            const resp = await fetch('/api/create-feishu-doc', {method: 'POST'});
+            const data = await resp.json();
+            if (data.error) {
+                alert('生成失败: ' + data.error);
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-file-earmark-plus me-1"></i>生成飞书文档';
+            } else {
+                btn.outerHTML = `<a href="${data.url}" target="_blank" class="btn btn-primary"><i class="bi bi-box-arrow-up-right me-1"></i>查看飞书文档</a>`;
+            }
+        } catch(e) {
+            alert('请求失败: ' + e.message);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-file-earmark-plus me-1"></i>生成飞书文档';
+        }
+    }
+
+    async function regenerate() {
+        const feedback = document.getElementById('regenFeedback').value.trim();
+        if (!feedback) { alert('请输入修改描述'); return; }
+        const btn = document.getElementById('regenBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>生成中...';
+        try {
+            const resp = await fetch('/api/regenerate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({feedback}),
+            });
+            const data = await resp.json();
+            if (data.error) {
+                alert('重新生成失败: ' + data.error);
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>重新生成';
+            } else {
+                location.href = '/results';
+            }
+        } catch(e) {
+            alert('请求失败: ' + e.message);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>重新生成';
+        }
+    }
+</script>
+{% endblock %}

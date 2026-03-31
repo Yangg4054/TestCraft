@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}TestCraft — 配置{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-6">
+        <h2 class="mb-4"><i class="bi bi-gear me-2"></i>配置</h2>
+
+        <form method="POST" action="{{ url_for('configure') }}">
+            <!-- LLM Config -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-cpu me-2"></i>LLM 配置
+                </div>
+                <div class="card-body">
+                    <!-- Provider -->
+                    <div class="mb-3">
+                        <label for="provider" class="form-label fw-semibold">服务商</label>
+                        <select name="provider" id="provider" class="form-select">
+                            <option value="openai" {% if config.provider == 'openai' %}selected{% endif %}>OpenAI</option>
+                            <option value="anthropic" {% if config.provider == 'anthropic' %}selected{% endif %}>Anthropic</option>
+                            <option value="custom" {% if config.provider == 'custom' %}selected{% endif %}>自定义 (OpenAI 兼容)</option>
+                        </select>
+                    </div>
+
+                    <!-- Base URL -->
+                    <div class="mb-3">
+                        <label for="base_url" class="form-label fw-semibold">接口地址</label>
+                        <input type="url" name="base_url" id="base_url" class="form-control"
+                               value="{{ config.base_url }}" placeholder="https://api.openai.com/v1">
+                        <div class="form-text">API 端点基础 URL。</div>
+                    </div>
+
+                    <!-- API Key -->
+                    <div class="mb-3">
+                        <label for="api_key" class="form-label fw-semibold">API 密钥</label>
+                        <div class="input-group">
+                            <input type="password" name="api_key" id="api_key" class="form-control"
+                                   value="{{ config.api_key }}" placeholder="sk-...">
+                            <button type="button" class="btn btn-outline-secondary" onclick="toggleApiKey()">
+                                <i class="bi bi-eye" id="apiKeyIcon"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Model -->
+                    <div class="mb-3">
+                        <label for="model" class="form-label fw-semibold">模型</label>
+                        <input type="text" name="model" id="model" class="form-control"
+                               value="{{ config.model }}" placeholder="gpt-4o">
+                        <div class="form-text">模型标识符（如 gpt-4o, claude-sonnet-4-20250514）。</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Feishu Config -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-cloud me-2"></i>飞书配置
+                    <span class="text-muted small ms-2">(可选，用于读取飞书文档)</span>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="feishu_app_id" class="form-label fw-semibold">App ID</label>
+                        <input type="text" name="feishu_app_id" id="feishu_app_id" class="form-control"
+                               value="{{ config.feishu_app_id }}" placeholder="cli_xxxxxxxxx">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="feishu_app_secret" class="form-label fw-semibold">App Secret</label>
+                        <div class="input-group">
+                            <input type="password" name="feishu_app_secret" id="feishu_app_secret" class="form-control"
+                                   value="{{ config.feishu_app_secret }}" placeholder="xxxxxxxxx">
+                            <button type="button" class="btn btn-outline-secondary" onclick="toggleFeishuSecret()">
+                                <i class="bi bi-eye" id="feishuSecretIcon"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="feishu_domain" class="form-label fw-semibold">API 域名</label>
+                        <input type="text" name="feishu_domain" id="feishu_domain" class="form-control"
+                               value="{{ config.feishu_domain }}" placeholder="https://open.feishu.cn">
+                        <div class="form-text">飞书使用 <code>https://open.feishu.cn</code>，Lark 使用 <code>https://open.larksuite.com</code>。</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-grid">
+                <button type="submit" class="btn btn-primary btn-lg">
+                    <i class="bi bi-check-lg me-1"></i>保存配置
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const providerDefaults = {{ provider_defaults | tojson }};
+
+    document.getElementById('provider').addEventListener('change', function() {
+        const defaults = providerDefaults[this.value] || {};
+        if (defaults.base_url !== undefined) {
+            document.getElementById('base_url').value = defaults.base_url;
+        }
+        if (defaults.model !== undefined) {
+            document.getElementById('model').value = defaults.model;
+        }
+    });
+
+    function toggleApiKey() {
+        const input = document.getElementById('api_key');
+        const icon = document.getElementById('apiKeyIcon');
+        if (input.type === 'password') {
+            input.type = 'text';
+            icon.classList.replace('bi-eye', 'bi-eye-slash');
+        } else {
+            input.type = 'password';
+            icon.classList.replace('bi-eye-slash', 'bi-eye');
+        }
+    }
+
+    function toggleFeishuSecret() {
+        const input = document.getElementById('feishu_app_secret');
+        const icon = document.getElementById('feishuSecretIcon');
+        if (input.type === 'password') {
+            input.type = 'text';
+            icon.classList.replace('bi-eye', 'bi-eye-slash');
+        } else {
+            input.type = 'password';
+            icon.classList.replace('bi-eye-slash', 'bi-eye');
+        }
+    }
+</script>
+{% endblock %}
