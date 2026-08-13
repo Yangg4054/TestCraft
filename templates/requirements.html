@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}TestCraft — 需求池{% endblock %}
+
+{% block content %}
+<div class="page-heading d-flex justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <div class="eyebrow">QUALITY WORKSPACE</div>
+        <h1 class="h3 mb-1">需求池</h1>
+        <p class="text-muted mb-0">统一沉淀需求，拆分功能点并进入测试设计。</p>
+    </div>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newRequirementModal"><i class="bi bi-plus-lg me-1"></i>新建需求</button>
+</div>
+
+<div class="row g-3 mb-4">
+    {% set ns = namespace(total=requirements|length, pending=0, split=0) %}
+    {% for item in requirements %}
+        {% if item.status == '待分析' %}{% set ns.pending = ns.pending + 1 %}{% endif %}
+        {% if item.status == '已拆分' %}{% set ns.split = ns.split + 1 %}{% endif %}
+    {% endfor %}
+    <div class="col-6 col-lg-3"><div class="metric-strip"><span class="metric-label">需求总数</span><strong>{{ ns.total }}</strong><i class="bi bi-inbox"></i></div></div>
+    <div class="col-6 col-lg-3"><div class="metric-strip"><span class="metric-label">待分析</span><strong>{{ ns.pending }}</strong><i class="bi bi-hourglass-split"></i></div></div>
+    <div class="col-6 col-lg-3"><div class="metric-strip"><span class="metric-label">已拆分</span><strong>{{ ns.split }}</strong><i class="bi bi-diagram-3"></i></div></div>
+    <div class="col-6 col-lg-3"><div class="metric-strip"><span class="metric-label">本页更新时间</span><strong class="fs-6">{{ requirements[0].updated_at[:10] if requirements else '暂无' }}</strong><i class="bi bi-calendar3"></i></div></div>
+</div>
+
+<div class="toolbar-panel mb-3">
+    <form class="row g-2 align-items-center" method="get" action="{{ url_for('requirements_pool') }}">
+        <div class="col-md"><div class="input-group"><span class="input-group-text"><i class="bi bi-search"></i></span><input class="form-control" name="q" value="{{ query }}" placeholder="搜索需求标题或内容"></div></div>
+        <div class="col-sm-4 col-md-3"><select class="form-select" name="status" onchange="this.form.submit()"><option value="">全部状态</option>{% for option in ['待分析','分析中','已拆分','已完成'] %}<option value="{{ option }}" {% if status == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></div>
+        <div class="col-auto"><button class="btn btn-outline-secondary" type="submit">筛选</button></div>
+    </form>
+</div>
+
+<div class="table-responsive workspace-table">
+    <table class="table align-middle mb-0">
+        <thead><tr><th>需求</th><th>优先级</th><th>状态</th><th>功能点</th><th>更新时间</th><th class="text-end">操作</th></tr></thead>
+        <tbody>
+        {% for item in requirements %}
+            <tr>
+                <td><a class="item-title" href="{{ url_for('requirement_detail', requirement_id=item.id) }}">{{ item.title }}</a><div class="item-subtitle">{{ item.content | truncate(100) }}</div></td>
+                <td><span class="badge priority-{{ item.priority|lower }}">{{ item.priority }}</span></td>
+                <td><span class="status-chip status-{{ item.status|replace(' ', '') }}">{{ item.status }}</span></td>
+                <td class="text-muted">{{ item.feature_points|length }} 个</td>
+                <td class="text-muted small">{{ item.updated_at }}</td>
+                <td class="text-end"><a href="{{ url_for('requirement_detail', requirement_id=item.id) }}" class="btn btn-sm btn-outline-primary">打开 <i class="bi bi-arrow-right"></i></a></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="6"><div class="empty-state"><i class="bi bi-inbox"></i><h3>需求池还是空的</h3><p>先录入一个需求，再让 AI 帮你拆分功能点。</p><button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newRequirementModal">新建第一条需求</button></div></td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="modal fade" id="newRequirementModal" tabindex="-1" aria-hidden="true"><div class="modal-dialog modal-lg modal-dialog-centered"><div class="modal-content"><form method="post" action="{{ url_for('create_requirement') }}" id="requirementForm"><input type="hidden" name="source_type" id="requirementSourceType" value="manual"><div class="modal-header"><h2 class="modal-title fs-5">新建需求</h2><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="source-switch mb-4"><button type="button" class="source-option active" data-source="manual"><i class="bi bi-pencil-square"></i><span>手动录入</span></button><button type="button" class="source-option" data-source="feishu"><i class="bi bi-cloud-arrow-down"></i><span>飞书文档</span></button></div><div class="row g-3"><div class="col-md-9"><label class="form-label">需求标题 <span id="titleOptional" class="text-muted small d-none">（可选，默认使用飞书标题）</span></label><input name="title" id="requirementTitle" class="form-control" required placeholder="例如：新用户 onboarding 实验分流"></div><div class="col-md-3"><label class="form-label">优先级</label><select name="priority" class="form-select"><option>P0</option><option selected>P1</option><option>P2</option><option>P3</option></select></div><div class="col-12 d-none" id="feishuSourceFields"><label class="form-label">飞书文档链接</label><div class="input-group"><span class="input-group-text"><i class="bi bi-link-45deg"></i></span><input name="feishu_url" id="requirementFeishuUrl" class="form-control" placeholder="https://xxx.feishu.cn/docx/... 或 /wiki/..."></div><div class="form-text">需要先在“配置”中填写有文档读取权限的飞书 App ID 和 App Secret。</div></div><div class="col-12" id="manualSourceFields"><label class="form-label">需求内容</label><textarea name="content" id="requirementContent" class="form-control" rows="8" required placeholder="描述用户、场景、业务规则、流程、异常和验收要求"></textarea></div><div class="col-md-6" id="manualSourceLabel"><label class="form-label">来源</label><input name="source" class="form-control" value="手动录入"></div></div></div><div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button><button class="btn btn-primary" type="submit"><i class="bi bi-check-lg me-1"></i>保存需求</button></div></form></div></div></div>
+{% endblock %}
+
+{% block scripts %}<script>
+document.querySelectorAll('.source-option').forEach(button => button.addEventListener('click', () => {
+    const source = button.dataset.source;
+    document.querySelectorAll('.source-option').forEach(item => item.classList.toggle('active', item === button));
+    document.getElementById('requirementSourceType').value = source;
+    const isFeishu = source === 'feishu';
+    document.getElementById('feishuSourceFields').classList.toggle('d-none', !isFeishu);
+    document.getElementById('manualSourceFields').classList.toggle('d-none', isFeishu);
+    document.getElementById('manualSourceLabel').classList.toggle('d-none', isFeishu);
+    document.getElementById('titleOptional').classList.toggle('d-none', !isFeishu);
+    document.getElementById('requirementTitle').required = !isFeishu;
+    document.getElementById('requirementContent').required = !isFeishu;
+    document.getElementById('requirementFeishuUrl').required = isFeishu;
+}));
+</script>{% endblock %}

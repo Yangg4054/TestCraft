@@ -26,3 +26,6 @@ outputs/
 
 # Environment
 .env
+
+# Local application credentials
+config.json

@@ -1,0 +1,53 @@
+<article class="feature-point" data-feature-id="{{ point.id }}">
+    <div class="feature-point-head">
+        <span class="feature-id">{{ point.id }}</span>
+        <h3>{{ point.name }}</h3>
+        <span class="badge priority-{{ point.priority|default('P1')|lower }} ms-auto">{{ point.priority|default('P1') }}</span>
+        <button class="btn btn-sm btn-outline-primary feature-case-btn" type="button" onclick="generateFeatureCases('{{ point.id }}', this)" title="根据此功能点生成测试用例">
+            <i class="bi bi-list-check me-1"></i>生成用例
+        </button>
+    </div>
+    <p>{{ point.description }}</p>
+
+    {% if point.actors or point.trigger or point.preconditions %}
+    <div class="feature-context">
+        {% if point.actors %}<span><strong>参与角色</strong>{{ point.actors|join('、') }}</span>{% endif %}
+        {% if point.trigger %}<span><strong>触发条件</strong>{{ point.trigger }}</span>{% endif %}
+        {% if point.preconditions %}<span><strong>前置条件</strong>{{ point.preconditions|join('；') }}</span>{% endif %}
+    </div>
+    {% endif %}
+
+    <details class="feature-details">
+        <summary>查看流程、规则与验收标准</summary>
+        <div class="feature-grid feature-grid-detailed">
+            <div><span class="feature-label">主流程</span><ol>{% for item in point.main_flow|default([]) %}<li>{{ item }}</li>{% else %}<li>暂无</li>{% endfor %}</ol></div>
+            <div><span class="feature-label">异常流程</span><ul>{% for item in point.exception_flows|default([]) %}<li>{{ item }}</li>{% else %}<li>暂无</li>{% endfor %}</ul></div>
+            <div><span class="feature-label">业务规则</span><ul>{% for item in point.business_rules|default([]) %}<li>{{ item }}</li>{% else %}<li>暂无</li>{% endfor %}</ul></div>
+            <div><span class="feature-label">数据变化</span><ul>{% for item in point.data_changes|default([]) %}<li>{{ item }}</li>{% else %}<li>暂无</li>{% endfor %}</ul></div>
+            <div><span class="feature-label">验收标准</span><ul>{% for item in point.acceptance_criteria|default([]) %}<li>{{ item }}</li>{% else %}<li>暂无</li>{% endfor %}</ul></div>
+            <div><span class="feature-label">内部 / 系统依赖与风险</span><ul>{% for item in point.dependencies|default([]) %}<li>{{ item }}</li>{% endfor %}{% for item in point.risks|default([]) %}<li>{{ item }}</li>{% else %}{% if not point.dependencies %}<li>暂无</li>{% endif %}{% endfor %}</ul></div>
+        </div>
+    </details>
+
+    {% if point.requirement_dependencies %}
+    <div class="requirement-dependencies">
+        <span class="feature-label"><i class="bi bi-link-45deg me-1"></i>历史需求依赖</span>
+        {% for dependency in point.requirement_dependencies %}
+        <div class="dependency-row">
+            <span class="dependency-type">{{ dependency.dependency_type }}</span>
+            <strong>[{{ dependency.requirement_id }}] {{ dependency.requirement_title }}</strong>
+            {% if dependency.reason %}<span>{{ dependency.reason }}</span>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if point.test_case_run_id %}
+    <div class="feature-case-result">
+        <i class="bi bi-check-circle"></i>
+        已生成 {{ point.test_case_count|default(0) }} 条用例
+        <a href="{{ url_for('history_detail', run_id=point.test_case_run_id) }}">查看结果</a>
+        {% if point.test_cases_updated_at %}<span>{{ point.test_cases_updated_at }}</span>{% endif %}
+    </div>
+    {% endif %}
+</article>

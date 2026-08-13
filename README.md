@@ -90,4 +90,11 @@ TestCraft/
 export FLASK_SECRET_KEY="your-secure-secret-key"
 ```
 
+如需自定义临时文件和历史记录目录，可设置：
+
+```bash
+export TESTCRAFT_UPLOAD_DIR="/path/to/uploads"
+export TESTCRAFT_OUTPUT_DIR="/path/to/outputs"
+```
+
 文件上传限制为 50 MB，临时文件将在 1 小时后自动清理。
