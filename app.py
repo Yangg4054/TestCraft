@@ -22,7 +22,15 @@ from flask import (
     url_for,
 )
 
-from config import load_config, save_config, PROVIDER_DEFAULTS
+from config import (
+    load_config,
+    save_config,
+    env_locked_fields,
+    mask_secret,
+    uses_database,
+    PROVIDER_DEFAULTS,
+    SECRET_FIELDS,
+)
 from services.doc_parser import parse_document, is_feishu_url
 from services.code_analyzer import analyze_code
 from services.ai_generator import generate_test_cases
@@ -838,21 +846,37 @@ def configure():
         config = {
             "provider": request.form.get("provider", "openai"),
             "base_url": request.form.get("base_url", "").strip(),
-            "api_key": request.form.get("api_key", "").strip(),
             "model": request.form.get("model", "").strip(),
             "feishu_app_id": request.form.get("feishu_app_id", "").strip(),
-            "feishu_app_secret": request.form.get("feishu_app_secret", "").strip(),
             "feishu_domain": request.form.get("feishu_domain", "https://open.feishu.cn").strip(),
         }
-        save_config(config)
-        flash("Configuration saved successfully.", "success")
+        # 密钥字段留空表示"保持不变"：页面不回显密钥，避免旧值被空值覆盖。
+        for field in SECRET_FIELDS:
+            submitted = request.form.get(field, "").strip()
+            config[field] = submitted if submitted else None
+
+        try:
+            save_config(config)
+        except Exception as e:
+            logger.exception("Failed to save configuration")
+            flash(f"配置保存失败：{e}", "danger")
+            return redirect(url_for("configure"))
+
+        flash(
+            "配置已保存到数据库，重启和重新部署都不会丢失。" if uses_database()
+            else "配置已保存到本地 config.json；未配置数据库时容器重启会丢失。",
+            "success" if uses_database() else "warning",
+        )
         return redirect(url_for("configure"))
 
-    config = load_config()
+    config = load_config(use_cache=False)
     return render_template(
         "configure.html",
         config=config,
         provider_defaults=PROVIDER_DEFAULTS,
+        secret_hints={field: mask_secret(config.get(field, "")) for field in SECRET_FIELDS},
+        uses_database=uses_database(),
+        env_locked=env_locked_fields(),
     )
 
 

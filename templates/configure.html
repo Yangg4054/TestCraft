@@ -2,94 +2,123 @@
 {% block title %}TestCraft — 配置{% endblock %}
 
 {% block content %}
+<div class="page-heading mb-4">
+    <div class="eyebrow">系统</div>
+    <h1 class="h3 mb-1">配置</h1>
+    <p class="text-muted mb-0">大模型与飞书凭证。填好后所有 AI 能力（需求拆分、Case 点、用例生成）才可用。</p>
+</div>
+
 <div class="row justify-content-center">
-    <div class="col-lg-6">
-        <h2 class="mb-4"><i class="bi bi-gear me-2"></i>配置</h2>
+    <div class="col-xl-8">
+        {% if uses_database %}
+        <div class="alert alert-success d-flex align-items-start gap-2">
+            <i class="bi bi-database-check mt-1"></i>
+            <div>
+                <strong>配置存储：PostgreSQL</strong>
+                <div class="small mb-0">配置保存在数据库中，重启、重新部署、多副本扩缩容都不会丢失。</div>
+            </div>
+        </div>
+        {% else %}
+        <div class="alert alert-warning d-flex align-items-start gap-2">
+            <i class="bi bi-exclamation-triangle mt-1"></i>
+            <div>
+                <strong>配置存储：本地文件 config.json</strong>
+                <div class="small mb-0">
+                    当前未配置数据库。该文件位于应用目录，<b>容器重启或重新部署后会被还原，配置随之丢失</b>。
+                    请给部署设置 <code>TESTCRAFT_DATABASE_URL</code> 环境变量，配置会自动改存数据库。
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if env_locked %}
+        <div class="alert alert-warning d-flex align-items-start gap-2">
+            <i class="bi bi-shield-lock mt-1"></i>
+            <div>
+                <strong>部分字段由环境变量提供</strong>
+                <div class="small mb-0">{{ env_locked | join('、') }} 已通过环境变量注入，页面上不可修改，也不会写入数据库。</div>
+            </div>
+        </div>
+        {% endif %}
 
         <form method="POST" action="{{ url_for('configure') }}">
-            <!-- LLM Config -->
             <div class="card mb-4">
-                <div class="card-header">
-                    <i class="bi bi-cpu me-2"></i>LLM 配置
-                </div>
+                <div class="card-header"><i class="bi bi-cpu me-2"></i>大模型配置</div>
                 <div class="card-body">
-                    <!-- Provider -->
                     <div class="mb-3">
-                        <label for="provider" class="form-label fw-semibold">服务商</label>
-                        <select name="provider" id="provider" class="form-select">
+                        <label for="provider" class="form-label">服务商</label>
+                        <select name="provider" id="provider" class="form-select" {% if 'provider' in env_locked %}disabled{% endif %}>
                             <option value="openai" {% if config.provider == 'openai' %}selected{% endif %}>OpenAI</option>
                             <option value="anthropic" {% if config.provider == 'anthropic' %}selected{% endif %}>Anthropic</option>
                             <option value="custom" {% if config.provider == 'custom' %}selected{% endif %}>自定义 (OpenAI 兼容)</option>
                         </select>
                     </div>
 
-                    <!-- Base URL -->
                     <div class="mb-3">
-                        <label for="base_url" class="form-label fw-semibold">接口地址</label>
+                        <label for="base_url" class="form-label">接口地址</label>
                         <input type="url" name="base_url" id="base_url" class="form-control"
-                               value="{{ config.base_url }}" placeholder="https://api.openai.com/v1">
-                        <div class="form-text">API 端点基础 URL。</div>
+                               value="{{ config.base_url }}" placeholder="https://api.openai.com/v1"
+                               {% if 'base_url' in env_locked %}readonly{% endif %}>
+                        <div class="form-text">API 端点基础 URL。OpenAI 兼容接口通常要带 <code>/v1</code>。</div>
                     </div>
 
-                    <!-- API Key -->
                     <div class="mb-3">
-                        <label for="api_key" class="form-label fw-semibold">API 密钥</label>
+                        <label for="api_key" class="form-label">API 密钥</label>
                         <div class="input-group">
-                            <input type="password" name="api_key" id="api_key" class="form-control"
-                                   value="{{ config.api_key }}" placeholder="sk-...">
-                            <button type="button" class="btn btn-outline-secondary" onclick="toggleApiKey()">
-                                <i class="bi bi-eye" id="apiKeyIcon"></i>
-                            </button>
+                            <input type="password" name="api_key" id="api_key" class="form-control" autocomplete="new-password"
+                                   placeholder="{% if secret_hints.api_key %}已配置 {{ secret_hints.api_key }}，留空表示不修改{% else %}sk-...{% endif %}"
+                                   {% if 'api_key' in env_locked %}disabled{% endif %}>
+                            <button type="button" class="btn btn-outline-secondary" onclick="toggleSecret('api_key', 'apiKeyIcon')"><i class="bi bi-eye" id="apiKeyIcon"></i></button>
+                        </div>
+                        <div class="form-text">
+                            {% if secret_hints.api_key %}当前密钥 <code>{{ secret_hints.api_key }}</code>。出于安全，页面不回显完整密钥；留空提交即保持不变。
+                            {% else %}尚未配置密钥，AI 功能不可用。{% endif %}
                         </div>
                     </div>
 
-                    <!-- Model -->
-                    <div class="mb-3">
-                        <label for="model" class="form-label fw-semibold">模型</label>
+                    <div class="mb-0">
+                        <label for="model" class="form-label">模型</label>
                         <input type="text" name="model" id="model" class="form-control"
-                               value="{{ config.model }}" placeholder="gpt-4o">
-                        <div class="form-text">模型标识符（如 gpt-4o, claude-sonnet-4-20250514）。</div>
+                               value="{{ config.model }}" placeholder="gpt-4o"
+                               {% if 'model' in env_locked %}readonly{% endif %}>
+                        <div class="form-text">模型标识符（如 <code>gpt-4o</code>、<code>claude-sonnet-4-20250514</code>）。</div>
                     </div>
                 </div>
             </div>
 
-            <!-- Feishu Config -->
             <div class="card mb-4">
-                <div class="card-header">
-                    <i class="bi bi-cloud me-2"></i>飞书配置
-                    <span class="text-muted small ms-2">(可选，用于读取飞书文档)</span>
-                </div>
+                <div class="card-header"><i class="bi bi-cloud me-2"></i>飞书配置<span class="text-muted small ms-2">（可选，用于读取飞书文档、回写用例）</span></div>
                 <div class="card-body">
                     <div class="mb-3">
-                        <label for="feishu_app_id" class="form-label fw-semibold">App ID</label>
+                        <label for="feishu_app_id" class="form-label">App ID</label>
                         <input type="text" name="feishu_app_id" id="feishu_app_id" class="form-control"
-                               value="{{ config.feishu_app_id }}" placeholder="cli_xxxxxxxxx">
+                               value="{{ config.feishu_app_id }}" placeholder="cli_xxxxxxxxx"
+                               {% if 'feishu_app_id' in env_locked %}readonly{% endif %}>
                     </div>
 
                     <div class="mb-3">
-                        <label for="feishu_app_secret" class="form-label fw-semibold">App Secret</label>
+                        <label for="feishu_app_secret" class="form-label">App Secret</label>
                         <div class="input-group">
-                            <input type="password" name="feishu_app_secret" id="feishu_app_secret" class="form-control"
-                                   value="{{ config.feishu_app_secret }}" placeholder="xxxxxxxxx">
-                            <button type="button" class="btn btn-outline-secondary" onclick="toggleFeishuSecret()">
-                                <i class="bi bi-eye" id="feishuSecretIcon"></i>
-                            </button>
+                            <input type="password" name="feishu_app_secret" id="feishu_app_secret" class="form-control" autocomplete="new-password"
+                                   placeholder="{% if secret_hints.feishu_app_secret %}已配置 {{ secret_hints.feishu_app_secret }}，留空表示不修改{% else %}xxxxxxxxx{% endif %}"
+                                   {% if 'feishu_app_secret' in env_locked %}disabled{% endif %}>
+                            <button type="button" class="btn btn-outline-secondary" onclick="toggleSecret('feishu_app_secret', 'feishuSecretIcon')"><i class="bi bi-eye" id="feishuSecretIcon"></i></button>
                         </div>
+                        {% if secret_hints.feishu_app_secret %}<div class="form-text">当前 Secret <code>{{ secret_hints.feishu_app_secret }}</code>，留空提交即保持不变。</div>{% endif %}
                     </div>
 
-                    <div class="mb-3">
-                        <label for="feishu_domain" class="form-label fw-semibold">API 域名</label>
+                    <div class="mb-0">
+                        <label for="feishu_domain" class="form-label">API 域名</label>
                         <input type="text" name="feishu_domain" id="feishu_domain" class="form-control"
-                               value="{{ config.feishu_domain }}" placeholder="https://open.feishu.cn">
+                               value="{{ config.feishu_domain }}" placeholder="https://open.feishu.cn"
+                               {% if 'feishu_domain' in env_locked %}readonly{% endif %}>
                         <div class="form-text">飞书使用 <code>https://open.feishu.cn</code>，Lark 使用 <code>https://open.larksuite.com</code>。</div>
                     </div>
                 </div>
             </div>
 
             <div class="d-grid">
-                <button type="submit" class="btn btn-primary btn-lg">
-                    <i class="bi bi-check-lg me-1"></i>保存配置
-                </button>
+                <button type="submit" class="btn btn-primary btn-lg"><i class="bi bi-check-lg me-1"></i>保存配置</button>
             </div>
         </form>
     </div>
@@ -100,38 +129,18 @@
 <script>
     const providerDefaults = {{ provider_defaults | tojson }};
 
-    document.getElementById('provider').addEventListener('change', function() {
+    document.getElementById('provider').addEventListener('change', function () {
         const defaults = providerDefaults[this.value] || {};
-        if (defaults.base_url !== undefined) {
-            document.getElementById('base_url').value = defaults.base_url;
-        }
-        if (defaults.model !== undefined) {
-            document.getElementById('model').value = defaults.model;
-        }
+        if (defaults.base_url !== undefined) document.getElementById('base_url').value = defaults.base_url;
+        if (defaults.model !== undefined) document.getElementById('model').value = defaults.model;
     });
 
-    function toggleApiKey() {
-        const input = document.getElementById('api_key');
-        const icon = document.getElementById('apiKeyIcon');
-        if (input.type === 'password') {
-            input.type = 'text';
-            icon.classList.replace('bi-eye', 'bi-eye-slash');
-        } else {
-            input.type = 'password';
-            icon.classList.replace('bi-eye-slash', 'bi-eye');
-        }
-    }
-
-    function toggleFeishuSecret() {
-        const input = document.getElementById('feishu_app_secret');
-        const icon = document.getElementById('feishuSecretIcon');
-        if (input.type === 'password') {
-            input.type = 'text';
-            icon.classList.replace('bi-eye', 'bi-eye-slash');
-        } else {
-            input.type = 'password';
-            icon.classList.replace('bi-eye-slash', 'bi-eye');
-        }
+    function toggleSecret(inputId, iconId) {
+        const input = document.getElementById(inputId);
+        const icon = document.getElementById(iconId);
+        const hidden = input.type === 'password';
+        input.type = hidden ? 'text' : 'password';
+        icon.classList.replace(hidden ? 'bi-eye' : 'bi-eye-slash', hidden ? 'bi-eye-slash' : 'bi-eye');
     }
 </script>
 {% endblock %}

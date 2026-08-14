@@ -81,6 +81,12 @@ CREATE TABLE IF NOT EXISTS case_sets (
     updated_at  TEXT        NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_case_sets_updated_at ON case_sets (updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_config (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -259,3 +265,32 @@ def delete_case_set(set_id: str) -> bool:
     with _get_pool().connection() as conn:
         result = conn.execute("DELETE FROM case_sets WHERE set_id = %s", (set_id,))
     return bool(result.rowcount)
+
+
+# --- 应用配置（app_config）------------------------------------------------
+# 大模型与飞书凭证以前只写在容器内的 config.json，重启即丢。存进数据库后，
+# 配置随实例重建、扩缩容和滚动发布保留。
+
+def load_app_config() -> dict[str, str]:
+    """Return every stored config key. Empty dict when nothing was saved yet."""
+    with _get_pool().connection() as conn:
+        rows = conn.execute("SELECT key, value FROM app_config").fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+def save_app_config(values: dict, updated_at: str = "") -> None:
+    """Upsert config keys. Only the keys present in `values` are touched."""
+    if not values:
+        return
+    with _get_pool().connection() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO app_config (key, value, updated_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (key) DO UPDATE SET
+                    value      = EXCLUDED.value,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                [(key, str(value or ""), updated_at) for key, value in values.items()],
+            )
