@@ -126,8 +126,11 @@ def _cleanup_old_files(directory: str, max_age_seconds: int = 3600) -> None:
         pass
 
 
-def _load_requirements() -> list[dict]:
-    """Load the requirement pool from its local JSON store."""
+# --- 需求池门面：配置了数据库走 PG，否则回退本地 JSON 文件 -------------------
+# 与 _store_run / _load_run / _list_runs 同一套模式：调用方只认这三个函数，
+# 不感知后端差异，也不需要改任何业务逻辑。
+
+def _load_requirements_from_file() -> list[dict]:
     if not os.path.exists(REQUIREMENTS_FILE):
         return []
     try:
@@ -139,7 +142,7 @@ def _load_requirements() -> list[dict]:
         return []
 
 
-def _save_requirements(requirements: list[dict]) -> None:
+def _save_requirements_to_file(requirements: list[dict]) -> None:
     os.makedirs(os.path.dirname(REQUIREMENTS_FILE), exist_ok=True)
     temp_path = f"{REQUIREMENTS_FILE}.tmp"
     with open(temp_path, "w", encoding="utf-8") as f:
@@ -147,7 +150,26 @@ def _save_requirements(requirements: list[dict]) -> None:
     os.replace(temp_path, REQUIREMENTS_FILE)
 
 
+def _load_requirements() -> list[dict]:
+    """Load the whole requirement pool (requirements + nested feature points)."""
+    if not DB_ENABLED:
+        return _load_requirements_from_file()
+    # db.list_requirements 按 updated_at 倒序返回；这里翻成正序，让"最近的排在末尾"
+    # 与文件后端的追加顺序一致 —— 拆分需求时取的历史上下文是 requirements[-15:]，
+    # 顺序反了会把最旧的需求当成最近的喂给大模型。展示用的排序各页面自己做。
+    return list(reversed(db.list_requirements()))
+
+
+def _save_requirements(requirements: list[dict]) -> None:
+    """Persist the whole pool. Replace semantics: 不在列表里的需求会被删除。"""
+    if not DB_ENABLED:
+        _save_requirements_to_file(requirements)
+        return
+    db.sync_requirements(requirements)
+
+
 def _find_requirement(requirement_id: str) -> tuple[list[dict], dict | None]:
+    """Return (whole pool, the matching requirement) so callers can mutate + save."""
     requirements = _load_requirements()
     for requirement in requirements:
         if requirement.get("id") == requirement_id:
