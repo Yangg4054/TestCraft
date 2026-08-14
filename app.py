@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import tempfile
 import time
 import uuid
 import asyncio
@@ -28,6 +29,8 @@ from services.export import export_excel, export_markdown
 from services.feishu_writer import create_test_case_doc
 from services.test_script_gen import generate_test_scripts
 
+import db
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
@@ -37,15 +40,32 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "testcraft-dev-secret-key")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
-OUTPUT_DIR = "/Users/presence_24_002/Documents/test_case"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Local-file fallback store, used only when no database is configured. Replaces the
+# old hard-coded absolute OUTPUT_DIR so the image is portable.
+FILE_STORE_DIR = os.environ.get(
+    "TESTCRAFT_FILE_STORE", os.path.join(tempfile.gettempdir(), "testcraft_runs")
+)
+os.makedirs(FILE_STORE_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Persistence backend: PostgreSQL when a DB URL is set (requirement docs + generated
+# test-case sets survive restarts and multiple replicas), else legacy local files.
+DB_ENABLED = db.is_enabled()
+if DB_ENABLED:
+    db.init_db()
+    logger.info("Persistence backend: PostgreSQL")
+else:
+    logger.warning(
+        "Persistence backend: local files at %s — set TESTCRAFT_DATABASE_URL to use PostgreSQL",
+        FILE_STORE_DIR,
+    )
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -85,6 +105,84 @@ def _cleanup_old_files(directory: str, max_age_seconds: int = 3600) -> None:
         pass
 
 
+# --- Persistence facade: PostgreSQL when configured, else local JSON files -----
+
+def _store_run(
+    run_id: str,
+    test_cases: list,
+    *,
+    requirement_text: str | None = None,
+    requirement_source: str | None = None,
+    code_structure_text: str | None = None,
+    feishu_doc_url: str | None = None,
+) -> None:
+    if DB_ENABLED:
+        db.save_run(
+            run_id,
+            test_cases,
+            requirement_text=requirement_text,
+            requirement_source=requirement_source,
+            code_structure_text=code_structure_text,
+            feishu_doc_url=feishu_doc_url,
+        )
+    else:
+        path = os.path.join(FILE_STORE_DIR, f"testcases_{run_id}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(test_cases, f, ensure_ascii=False)
+
+
+def _load_run(run_id: str | None) -> dict | None:
+    """Return a run dict (with at least test_cases + feishu_doc_url), or None."""
+    if not run_id:
+        return None
+    if DB_ENABLED:
+        return db.get_run(run_id)
+    path = os.path.join(FILE_STORE_DIR, f"testcases_{run_id}.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return {"run_id": run_id, "test_cases": json.load(f), "feishu_doc_url": ""}
+
+
+def _list_runs() -> list:
+    if DB_ENABLED:
+        return db.list_runs()
+    records = []
+    for fn in sorted(os.listdir(FILE_STORE_DIR), reverse=True):
+        if not fn.endswith(".json"):
+            continue
+        run_id = fn[len("testcases_"):-len(".json")]
+        fpath = os.path.join(FILE_STORE_DIR, fn)
+        try:
+            with open(fpath, "r", encoding="utf-8") as fh:
+                count = len(json.load(fh))
+        except Exception:
+            count = 0
+        records.append({
+            "run_id": run_id,
+            "count": count,
+            "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(os.stat(fpath).st_mtime)),
+        })
+    return records
+
+
+def _update_feishu(run_id: str | None, url: str) -> None:
+    if DB_ENABLED and run_id:
+        db.update_feishu_url(run_id, url)
+
+
+def _make_export(test_cases: list, fmt: str) -> str:
+    """Regenerate an export artifact from stored test cases into a temp file."""
+    suffix = ".xlsx" if fmt == "excel" else ".md"
+    fd, path = tempfile.mkstemp(prefix="tc_export_", suffix=suffix)
+    os.close(fd)
+    if fmt == "excel":
+        export_excel(test_cases, path)
+    else:
+        export_markdown(test_cases, path)
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -92,7 +190,6 @@ def _cleanup_old_files(directory: str, max_age_seconds: int = 3600) -> None:
 @app.route("/")
 def index():
     _cleanup_old_files(UPLOAD_DIR)
-    _cleanup_old_files(OUTPUT_DIR)
     return render_template("index.html")
 
 
@@ -125,6 +222,7 @@ def generate():
     try:
         # --- Parse requirements document ---
         requirements_text = None
+        requirement_source = None
 
         # Option 1: Feishu document URL
         feishu_url = request.form.get("feishu_url", "").strip()
@@ -132,6 +230,7 @@ def generate():
             if is_feishu_url(feishu_url):
                 try:
                     requirements_text = parse_document(feishu_url)
+                    requirement_source = feishu_url
                 except ValueError as e:
                     flash(f"Failed to parse Feishu document: {e}", "danger")
                     return redirect(url_for("index"))
@@ -148,6 +247,7 @@ def generate():
                     return redirect(url_for("index"))
                 doc_path = _save_upload(doc_file, "docs")
                 requirements_text = parse_document(doc_path)
+                requirement_source = doc_file.filename
 
         if not requirements_text:
             flash("Please upload a requirements document.", "danger")
@@ -175,31 +275,25 @@ def generate():
         # --- Generate test cases ---
         test_cases = generate_test_cases(requirements_text, code_structure_text)
 
-        # --- Store in session for download ---
+        # --- Create Feishu document (best effort) ---
         run_id = uuid.uuid4().hex[:12]
-        session["run_id"] = run_id
-
-        # Save test cases to JSON file (avoid cookie size limit)
-        tc_json_path = os.path.join(OUTPUT_DIR, f"testcases_{run_id}.json")
-        with open(tc_json_path, "w", encoding="utf-8") as f:
-            json.dump(test_cases, f, ensure_ascii=False)
-        session["tc_json_path"] = tc_json_path
-
-        # --- Pre-generate export files ---
-        excel_path = os.path.join(OUTPUT_DIR, f"testcases_{run_id}.xlsx")
-        md_path = os.path.join(OUTPUT_DIR, f"testcases_{run_id}.md")
-        export_excel(test_cases, excel_path)
-        export_markdown(test_cases, md_path)
-        session["excel_path"] = excel_path
-        session["md_path"] = md_path
-
-        # --- Create Feishu document ---
         try:
-            feishu_url = create_test_case_doc(test_cases, f"测试用例 - {run_id}")
-            session["feishu_doc_url"] = feishu_url
+            feishu_doc_url = create_test_case_doc(test_cases, f"测试用例 - {run_id}")
         except Exception as e:
             logger.warning("Failed to create Feishu document: %s", e)
-            session["feishu_doc_url"] = ""
+            feishu_doc_url = ""
+
+        # --- Persist the run (requirement doc + generated test-case set) ---
+        _store_run(
+            run_id,
+            test_cases,
+            requirement_text=requirements_text,
+            requirement_source=requirement_source,
+            code_structure_text=code_structure_text,
+            feishu_doc_url=feishu_doc_url,
+        )
+        session["run_id"] = run_id
+        session["feishu_doc_url"] = feishu_doc_url
 
         return redirect(url_for("results"))
 
@@ -215,33 +309,29 @@ def generate():
 
 @app.route("/results")
 def results():
-    tc_json_path = session.get("tc_json_path")
-    if tc_json_path and os.path.exists(tc_json_path):
-        with open(tc_json_path, "r", encoding="utf-8") as f:
-            test_cases = json.load(f)
-    else:
-        test_cases = None
+    run = _load_run(session.get("run_id"))
+    test_cases = run["test_cases"] if run else None
     if not test_cases:
         flash("No test cases to display. Please generate first.", "warning")
         return redirect(url_for("index"))
-    return render_template("results.html", test_cases=test_cases, feishu_doc_url=session.get("feishu_doc_url", ""), excel_path=session.get("excel_path", ""))
+    feishu_doc_url = (run.get("feishu_doc_url") or session.get("feishu_doc_url", "")) if run else ""
+    return render_template("results.html", test_cases=test_cases, feishu_doc_url=feishu_doc_url, excel_path="")
 
 
 @app.route("/run-test")
 def run_test():
-    excel_path = session.get("excel_path", "")
-    return render_template("run_test.html", excel_path=excel_path)
+    return render_template("run_test.html", excel_path="")
 
 
 @app.route("/download/<fmt>")
 def download(fmt: str):
-    if fmt == "excel":
-        path = session.get("excel_path")
-        if path and os.path.exists(path):
+    run = _load_run(session.get("run_id"))
+    if run and run.get("test_cases"):
+        if fmt == "excel":
+            path = _make_export(run["test_cases"], "excel")
             return send_file(path, as_attachment=True, download_name="test_cases.xlsx")
-    elif fmt == "markdown":
-        path = session.get("md_path")
-        if path and os.path.exists(path):
+        elif fmt == "markdown":
+            path = _make_export(run["test_cases"], "markdown")
             return send_file(path, as_attachment=True, download_name="test_cases.md")
 
     flash("File not found. Please regenerate test cases.", "warning")
@@ -251,14 +341,13 @@ def download(fmt: str):
 @app.route("/api/create-feishu-doc", methods=["POST"])
 def api_create_feishu_doc():
     """Create a Feishu document from the current session's test cases."""
-    tc_json_path = session.get("tc_json_path")
-    if not tc_json_path or not os.path.exists(tc_json_path):
+    run_id = session.get("run_id")
+    run = _load_run(run_id)
+    if not run or not run.get("test_cases"):
         return json.dumps({"error": "没有测试用例数据"}), 400, {"Content-Type": "application/json"}
-    with open(tc_json_path, "r", encoding="utf-8") as f:
-        test_cases = json.load(f)
     try:
-        run_id = session.get("run_id", "unknown")
-        feishu_url = create_test_case_doc(test_cases, f"测试用例 - {run_id}")
+        feishu_url = create_test_case_doc(run["test_cases"], f"测试用例 - {run_id}")
+        _update_feishu(run_id, feishu_url)
         session["feishu_doc_url"] = feishu_url
         return json.dumps({"url": feishu_url}), 200, {"Content-Type": "application/json"}
     except Exception as e:
@@ -269,8 +358,8 @@ def api_create_feishu_doc():
 @app.route("/api/generate-scripts", methods=["POST"])
 def api_generate_scripts():
     """Generate executable test scripts from test cases + code paths."""
-    tc_json_path = session.get("tc_json_path")
-    if not tc_json_path or not os.path.exists(tc_json_path):
+    run = _load_run(session.get("run_id"))
+    if not run or not run.get("test_cases"):
         return json.dumps({"error": "没有测试用例数据，请先生成测试用例"}), 400, {"Content-Type": "application/json"}
 
     data = request.get_json()
@@ -278,11 +367,8 @@ def api_generate_scripts():
     if not code_paths:
         return json.dumps({"error": "请提供至少一个代码路径"}), 400, {"Content-Type": "application/json"}
 
-    with open(tc_json_path, "r", encoding="utf-8") as f:
-        test_cases = json.load(f)
-
     try:
-        result = generate_test_scripts(test_cases, code_paths)
+        result = generate_test_scripts(run["test_cases"], code_paths)
         # result has: architecture, scripts, project_dir
         session["test_project_dir"] = result["project_dir"]
         return json.dumps({
@@ -300,8 +386,8 @@ def api_regenerate():
     """Regenerate test cases with user feedback."""
     from services.ai_generator import call_llm, SYSTEM_PROMPT, _parse_response
 
-    tc_json_path = session.get("tc_json_path")
-    if not tc_json_path or not os.path.exists(tc_json_path):
+    old_run = _load_run(session.get("run_id"))
+    if not old_run or not old_run.get("test_cases"):
         return json.dumps({"error": "没有测试用例数据"}), 400, {"Content-Type": "application/json"}
 
     data = request.get_json()
@@ -309,9 +395,7 @@ def api_regenerate():
     if not feedback:
         return json.dumps({"error": "请输入修改描述"}), 400, {"Content-Type": "application/json"}
 
-    with open(tc_json_path, "r", encoding="utf-8") as f:
-        old_cases = json.load(f)
-
+    old_cases = old_run["test_cases"]
     old_cases_text = json.dumps(old_cases[:30], ensure_ascii=False, indent=2)
     user_content = f"""## 已有测试用例
 {old_cases_text}
@@ -326,21 +410,17 @@ Return ONLY a JSON array of test case objects."""
         content = call_llm(SYSTEM_PROMPT, user_content)
         test_cases = _parse_response(content)
 
-        # Save updated test cases
+        # Save as a new run, carrying the original requirement context forward.
         run_id = uuid.uuid4().hex[:12]
-        tc_json_path_new = os.path.join(OUTPUT_DIR, f"testcases_{run_id}.json")
-        with open(tc_json_path_new, "w", encoding="utf-8") as f:
-            json.dump(test_cases, f, ensure_ascii=False)
-
-        excel_path = os.path.join(OUTPUT_DIR, f"testcases_{run_id}.xlsx")
-        md_path = os.path.join(OUTPUT_DIR, f"testcases_{run_id}.md")
-        export_excel(test_cases, excel_path)
-        export_markdown(test_cases, md_path)
-
-        session["tc_json_path"] = tc_json_path_new
+        _store_run(
+            run_id,
+            test_cases,
+            requirement_text=old_run.get("requirement_text"),
+            requirement_source=old_run.get("requirement_source"),
+            code_structure_text=old_run.get("code_structure_text"),
+            feishu_doc_url="",
+        )
         session["run_id"] = run_id
-        session["excel_path"] = excel_path
-        session["md_path"] = md_path
         session["feishu_doc_url"] = ""
 
         return json.dumps({"count": len(test_cases), "run_id": run_id}), 200, {"Content-Type": "application/json"}
@@ -357,48 +437,27 @@ def api_provider_defaults(provider: str):
 
 @app.route("/history")
 def history():
-    """List previously generated test case files."""
-    records = []
-    if os.path.isdir(OUTPUT_DIR):
-        for f in sorted(os.listdir(OUTPUT_DIR), reverse=True):
-            if f.endswith(".json"):
-                run_id = f.replace("testcases_", "").replace(".json", "")
-                fpath = os.path.join(OUTPUT_DIR, f)
-                stat = os.stat(fpath)
-                try:
-                    with open(fpath, "r", encoding="utf-8") as fh:
-                        tc = json.load(fh)
-                    count = len(tc)
-                except Exception:
-                    count = 0
-                records.append({
-                    "run_id": run_id,
-                    "count": count,
-                    "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(stat.st_mtime)),
-                })
+    """List previously generated test case runs."""
+    records = _list_runs()
     return render_template("history.html", records=records)
 
 
 @app.route("/history/<run_id>")
 def history_detail(run_id: str):
     """View a specific historical test case run."""
-    tc_json_path = os.path.join(OUTPUT_DIR, f"testcases_{run_id}.json")
-    if not os.path.exists(tc_json_path):
+    run = _load_run(run_id)
+    if not run or not run.get("test_cases"):
         flash("记录不存在。", "warning")
         return redirect(url_for("history"))
-    with open(tc_json_path, "r", encoding="utf-8") as f:
-        test_cases = json.load(f)
-    excel_path = os.path.join(OUTPUT_DIR, f"testcases_{run_id}.xlsx")
-    if not os.path.exists(excel_path):
-        excel_path = ""
-    md_path = os.path.join(OUTPUT_DIR, f"testcases_{run_id}.md")
-    if not os.path.exists(md_path):
-        md_path = ""
-    # Store in session so download route works
-    session["excel_path"] = excel_path
-    session["md_path"] = md_path
-    session["tc_json_path"] = tc_json_path
-    return render_template("results.html", test_cases=test_cases, feishu_doc_url="", excel_path=excel_path)
+    # Make this run the active one so download / feishu / regenerate act on it.
+    session["run_id"] = run_id
+    session["feishu_doc_url"] = run.get("feishu_doc_url", "")
+    return render_template(
+        "results.html",
+        test_cases=run["test_cases"],
+        feishu_doc_url=run.get("feishu_doc_url", ""),
+        excel_path="",
+    )
 
 
 @app.route("/autotest")
