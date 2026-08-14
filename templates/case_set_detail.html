@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}TestCraft — {{ case_set.name }}{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a class="text-muted text-decoration-none" href="{{ url_for('case_set_list') }}"><i class="bi bi-arrow-left me-1"></i>返回用例集</a>
+</div>
+
+<div class="page-heading d-flex justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <div class="eyebrow">测试资产 · 用例集</div>
+        <h1 class="h3 mb-2">{{ case_set.name }}</h1>
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+            <span class="tag-chip tone-brand">{{ case_set.cases|length }} 条用例</span>
+            <span class="text-muted small">创建于 {{ case_set.created_at }} · 更新于 {{ case_set.updated_at }}</span>
+        </div>
+        {% if case_set.description %}<p class="text-muted mb-0 mt-2">{{ case_set.description }}</p>{% endif %}
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-success" href="{{ url_for('download_case_set', set_id=case_set.id, fmt='excel') }}"><i class="bi bi-file-earmark-spreadsheet me-1"></i>导出 Excel</a>
+        <a class="btn btn-outline-primary" href="{{ url_for('download_case_set', set_id=case_set.id, fmt='markdown') }}"><i class="bi bi-markdown me-1"></i>导出 Markdown</a>
+        <div class="dropdown">
+            <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">更多</button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#editCaseSetModal"><i class="bi bi-pencil me-2"></i>编辑信息</button></li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                    <form method="post" action="{{ url_for('delete_case_set', set_id=case_set.id) }}" onsubmit="return confirm('确定删除这个用例集？其中的用例会一并删除。');">
+                        <button class="dropdown-item text-danger" type="submit"><i class="bi bi-trash3 me-2"></i>删除用例集</button>
+                    </form>
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+{% if case_set.cases %}
+{% set ns = namespace(p0=0, p1=0, p2=0, p3=0) %}
+{% for tc in case_set.cases %}
+    {% if tc.priority == 'P0' %}{% set ns.p0 = ns.p0 + 1 %}
+    {% elif tc.priority == 'P1' %}{% set ns.p1 = ns.p1 + 1 %}
+    {% elif tc.priority == 'P2' %}{% set ns.p2 = ns.p2 + 1 %}
+    {% else %}{% set ns.p3 = ns.p3 + 1 %}{% endif %}
+{% endfor %}
+<div class="priority-summary mb-4">
+    <div class="metric-strip tone-danger"><span class="metric-label">P0 严重</span><strong>{{ ns.p0 }}</strong><i class="bi bi-exclamation-octagon"></i></div>
+    <div class="metric-strip tone-warning"><span class="metric-label">P1 高</span><strong>{{ ns.p1 }}</strong><i class="bi bi-exclamation-triangle"></i></div>
+    <div class="metric-strip"><span class="metric-label">P2 中</span><strong>{{ ns.p2 }}</strong><i class="bi bi-info-circle"></i></div>
+    <div class="metric-strip"><span class="metric-label">P3 低</span><strong>{{ ns.p3 }}</strong><i class="bi bi-dash-circle"></i></div>
+</div>
+
+<div class="results-toolbar">
+    <div class="form-check mb-0"><input class="form-check-input" type="checkbox" id="selectAll"><label class="form-check-label small" for="selectAll">全选</label></div>
+    <span class="selection-hint">已选 <b id="selectedCount">0</b> 条</span>
+    <input type="text" id="searchInput" class="form-control form-control-sm ms-auto" style="max-width: 260px;" placeholder="搜索用例...">
+    <button class="btn btn-sm btn-outline-secondary" id="removeBtn" onclick="removeSelected(this)" disabled><i class="bi bi-trash3 me-1"></i>移出用例集</button>
+</div>
+
+<div class="table-responsive workspace-table">
+    <table class="table align-middle mb-0" id="caseTable">
+        <thead>
+            <tr>
+                <th style="width:42px"></th>
+                <th style="width:76px">编号</th>
+                <th style="width:130px">模块</th>
+                <th>测试用例名称</th>
+                <th style="width:78px" class="text-center">优先级</th>
+                <th>前置条件</th>
+                <th>测试步骤</th>
+                <th>预期结果</th>
+                <th style="width:110px">类型</th>
+                <th style="width:96px">测试方法</th>
+                <th style="width:130px">来源</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for tc in case_set.cases %}
+            <tr class="tc-row" data-case-id="{{ tc.id }}">
+                <td><input class="form-check-input tc-check" type="checkbox" value="{{ tc.id }}"></td>
+                <td class="text-nowrap fw-semibold">{{ tc.id }}</td>
+                <td>{{ tc.module }}</td>
+                <td class="fw-semibold">{{ tc.name }}</td>
+                <td class="text-center"><span class="badge priority-{{ tc.priority | lower }}">{{ tc.priority }}</span></td>
+                <td class="small">{{ tc.preconditions }}</td>
+                <td class="small">{{ tc.steps }}</td>
+                <td class="small">{{ tc.expected_result }}</td>
+                <td><span class="tag-chip">{{ tc.type }}</span></td>
+                <td class="small text-muted">{{ tc.method or '' }}</td>
+                <td class="small text-muted">{{ tc.source_requirement_title or '—' }}{% if tc.added_at %}<div class="text-muted" style="font-size:.68rem">{{ tc.added_at[:16] }}</div>{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="surface-card">
+    <div class="empty-state">
+        <i class="bi bi-inbox"></i>
+        <h3>这个用例集还是空的</h3>
+        <p>去生成测试用例，在结果页勾选后保存到这里。</p>
+        <a class="btn btn-primary" href="{{ url_for('index') }}"><i class="bi bi-magic me-1"></i>生成测试用例</a>
+    </div>
+</div>
+{% endif %}
+
+<div class="modal fade" id="editCaseSetModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post" action="{{ url_for('update_case_set', set_id=case_set.id) }}">
+                <div class="modal-header">
+                    <h2 class="modal-title fs-5"><i class="bi bi-pencil-square me-2"></i>编辑用例集</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3"><label class="form-label">名称</label><input name="name" class="form-control" required value="{{ case_set.name }}"></div>
+                    <div><label class="form-label">说明</label><textarea name="description" class="form-control" rows="3">{{ case_set.description }}</textarea></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+                    <button class="btn btn-primary" type="submit"><i class="bi bi-check-lg me-1"></i>保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const caseSetId = {{ case_set.id | tojson }};
+
+function selectedIds() {
+    return Array.from(document.querySelectorAll('.tc-check:checked')).map(node => node.value);
+}
+
+function refreshSelection() {
+    const count = selectedIds().length;
+    const label = document.getElementById('selectedCount');
+    if (label) label.textContent = count;
+    const removeBtn = document.getElementById('removeBtn');
+    if (removeBtn) removeBtn.disabled = count === 0;
+    document.querySelectorAll('.tc-row').forEach(row => {
+        const box = row.querySelector('.tc-check');
+        row.classList.toggle('selected', !!(box && box.checked));
+    });
+}
+
+document.querySelectorAll('.tc-check').forEach(box => box.addEventListener('change', refreshSelection));
+
+const selectAll = document.getElementById('selectAll');
+if (selectAll) {
+    selectAll.addEventListener('change', () => {
+        document.querySelectorAll('.tc-row').forEach(row => {
+            if (row.style.display === 'none') return;
+            const box = row.querySelector('.tc-check');
+            if (box) box.checked = selectAll.checked;
+        });
+        refreshSelection();
+    });
+}
+
+const searchInput = document.getElementById('searchInput');
+if (searchInput) {
+    searchInput.addEventListener('input', function () {
+        const q = this.value.toLowerCase();
+        document.querySelectorAll('.tc-row').forEach(row => {
+            row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+        });
+    });
+}
+
+async function removeSelected(btn) {
+    const ids = selectedIds();
+    if (!ids.length) return;
+    if (!confirm(`确定把选中的 ${ids.length} 条用例移出这个用例集？`)) return;
+    const restore = tcBusy(btn, '移除中...');
+    try {
+        const data = await tcFetchJson(`/api/case-sets/${caseSetId}/cases/remove`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({case_ids: ids}),
+        });
+        tcToast(`已移出 ${data.removed} 条用例`, 'success');
+        setTimeout(() => window.location.reload(), 600);
+    } catch (error) {
+        tcToast('移除失败：' + error.message, 'error');
+        restore();
+    }
+}
+
+refreshSelection();
+</script>
+{% endblock %}
