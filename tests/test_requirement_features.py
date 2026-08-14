@@ -14,7 +14,9 @@ class RequirementFeatureTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_output_dir = testcraft.OUTPUT_DIR
         self.original_requirements_file = testcraft.REQUIREMENTS_FILE
+        self.original_file_store_dir = testcraft.FILE_STORE_DIR
         testcraft.OUTPUT_DIR = self.temp_dir.name
+        testcraft.FILE_STORE_DIR = self.temp_dir.name
         testcraft.REQUIREMENTS_FILE = os.path.join(
             self.temp_dir.name, "requirements.json"
         )
@@ -24,6 +26,7 @@ class RequirementFeatureTests(unittest.TestCase):
     def tearDown(self):
         testcraft.OUTPUT_DIR = self.original_output_dir
         testcraft.REQUIREMENTS_FILE = self.original_requirements_file
+        testcraft.FILE_STORE_DIR = self.original_file_store_dir
         self.temp_dir.cleanup()
 
     def save_requirements(self, requirements):
@@ -176,9 +179,8 @@ class RequirementFeatureTests(unittest.TestCase):
         self.assertEqual(data["redirect"], "/results")
         mocked.assert_called_once()
         self.assertEqual(mocked.call_args.kwargs, {"target_count": 12, "min_count": 6})
-        for extension in ("json", "xlsx", "md"):
-            path = Path(self.temp_dir.name, f"testcases_{data['run_id']}.{extension}")
-            self.assertTrue(path.exists())
+        path = Path(self.temp_dir.name, f"testcases_{data['run_id']}.json")
+        self.assertTrue(path.exists())
 
         stored_feature = testcraft._load_requirements()[0]["feature_points"][0]
         self.assertEqual(stored_feature["test_case_run_id"], data["run_id"])
@@ -225,7 +227,8 @@ class RequirementFeatureTests(unittest.TestCase):
             "type": "Functional",
             "method": "场景法",
         }]
-        old_path = Path(self.temp_dir.name, "testcases_old.json")
+        old_run_id = "0" * 12
+        old_path = Path(self.temp_dir.name, f"testcases_{old_run_id}.json")
         old_path.write_text(json.dumps(old_cases, ensure_ascii=False), encoding="utf-8")
         new_cases = [dict(old_cases[0], name=f"新用例 {index}") for index in range(12)]
 
@@ -234,7 +237,7 @@ class RequirementFeatureTests(unittest.TestCase):
             return path
 
         with self.client.session_transaction() as session:
-            session["tc_json_path"] = str(old_path)
+            session["run_id"] = old_run_id
         with (
             patch("services.ai_generator.call_llm", return_value=json.dumps({"test_cases": new_cases}, ensure_ascii=False)),
             patch.object(testcraft, "export_excel", side_effect=touch_export),
