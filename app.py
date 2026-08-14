@@ -27,10 +27,12 @@ from services.doc_parser import parse_document, is_feishu_url
 from services.code_analyzer import analyze_code
 from services.ai_generator import generate_test_cases
 from services.ai_generator import split_requirement
+from services.ai_generator import generate_case_points
 from services.export import export_excel, export_markdown
 from services.feishu_writer import create_test_case_doc
 from services.test_script_gen import generate_test_scripts
 
+import case_sets
 import db
 
 # ---------------------------------------------------------------------------
@@ -80,6 +82,8 @@ else:
 
 ALLOWED_DOC_EXTENSIONS = {".docx", ".pdf", ".md", ".markdown", ".txt"}
 ALLOWED_CODE_EXTENSIONS = {".zip"}
+REQUIREMENT_STATUSES = ("待分析", "分析中", "已拆分", "已完成")
+PRIORITIES = ("P0", "P1", "P2", "P3")
 
 
 def _allowed_doc(filename: str) -> bool:
@@ -143,6 +147,40 @@ def _find_requirement(requirement_id: str) -> tuple[list[dict], dict | None]:
     return requirements, None
 
 
+def _find_feature_point(requirement: dict, feature_id: str) -> dict | None:
+    return next(
+        (
+            point for point in requirement.get("feature_points", []) or []
+            if isinstance(point, dict) and point.get("id") == feature_id
+        ),
+        None,
+    )
+
+
+def _new_requirement(
+    title: str,
+    content: str,
+    *,
+    priority: str = "P1",
+    source: str = "手动录入",
+    source_url: str = "",
+) -> dict:
+    """Build a requirement-pool record. Single place that defines the shape."""
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    return {
+        "id": uuid.uuid4().hex[:12],
+        "title": title,
+        "content": content,
+        "priority": priority if priority in PRIORITIES else "P1",
+        "status": "待分析",
+        "source": source,
+        "source_url": source_url,
+        "feature_points": [],
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
 def _title_from_document(text: str, fallback: str = "未命名需求") -> str:
     """Use the first Markdown heading or non-empty line as a document title."""
     for line in text.splitlines():
@@ -166,6 +204,20 @@ def _store_test_case_run(test_cases: list[dict], **context) -> dict:
     session["run_id"] = run_id
     session["feishu_doc_url"] = ""
     return {"run_id": run_id}
+
+
+def _remember_run_origin(
+    *,
+    requirement_id: str = "",
+    requirement_title: str = "",
+    feature_id: str = "",
+) -> None:
+    """Track where the active run came from, so saved cases stay traceable."""
+    session["run_origin"] = {
+        "requirement_id": requirement_id,
+        "requirement_title": requirement_title,
+        "feature_id": feature_id,
+    }
 
 
 def _feature_point_requirement_text(
@@ -193,6 +245,9 @@ def _feature_point_requirement_text(
                 "content": str(item.get("content", ""))[:4000],
             })
 
+    case_points = [
+        point for point in (feature_point.get("case_points") or []) if isinstance(point, dict)
+    ]
     source = {
         "current_requirement": {
             "id": requirement.get("id", ""),
@@ -206,6 +261,14 @@ def _feature_point_requirement_text(
             "状态与数据变化、边界、权限以及已识别的跨需求依赖。"
         ),
     }
+    if case_points:
+        # 已完成第二阶段（生成 Case 点）时，用例必须逐条落到测试点上，保证可追溯。
+        source["case_points"] = case_points
+        source["test_scope"] = (
+            "case_points 是本功能点已评审的测试点清单。请为每个测试点生成 1~3 条可执行用例，"
+            "覆盖其 conditions 与 verify_points，并在用例的 module 字段保留功能点名称。"
+            "不得遗漏任何测试点，也不要生成与测试点无关的用例。"
+        )
     return json.dumps(source, ensure_ascii=False, indent=2)[:30000]
 
 
@@ -287,6 +350,35 @@ def _make_export(test_cases: list, fmt: str) -> str:
     return path
 
 
+@app.context_processor
+def inject_nav_state():
+    """Counters shown next to the three workflow stages in the sidebar."""
+    try:
+        requirements = _load_requirements()
+    except Exception:
+        logger.exception("Failed to load requirements for navigation")
+        requirements = []
+    features = [
+        point
+        for item in requirements
+        for point in (item.get("feature_points") or [])
+        if isinstance(point, dict)
+    ]
+    try:
+        set_count = len(case_sets.list_sets())
+    except Exception:
+        logger.exception("Failed to load case sets for navigation")
+        set_count = 0
+    return {
+        "nav_counts": {
+            "requirements": len(requirements),
+            "features": len(features),
+            "case_points": sum(len(point.get("case_points") or []) for point in features),
+            "case_sets": set_count,
+        }
+    }
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -347,19 +439,13 @@ def create_requirement():
     if priority not in {"P0", "P1", "P2", "P3"}:
         priority = "P1"
 
-    now = time.strftime("%Y-%m-%d %H:%M:%S")
-    requirement = {
-        "id": uuid.uuid4().hex[:12],
-        "title": title,
-        "content": content,
-        "priority": priority,
-        "status": "待分析",
-        "source": source,
-        "source_url": feishu_url if source_type == "feishu" else "",
-        "feature_points": [],
-        "created_at": now,
-        "updated_at": now,
-    }
+    requirement = _new_requirement(
+        title,
+        content,
+        priority=priority,
+        source=source,
+        source_url=feishu_url if source_type == "feishu" else "",
+    )
     requirements = _load_requirements()
     requirements.append(requirement)
     _save_requirements(requirements)
@@ -374,6 +460,45 @@ def requirement_detail(requirement_id: str):
         flash("需求不存在。", "warning")
         return redirect(url_for("requirements_pool"))
     return render_template("requirement_detail.html", requirement=requirement)
+
+
+@app.route("/requirements/<requirement_id>/update", methods=["POST"])
+def update_requirement(requirement_id: str):
+    """Edit a requirement in place. Feature points and case points are kept."""
+    requirements, requirement = _find_requirement(requirement_id)
+    if not requirement:
+        flash("需求不存在。", "warning")
+        return redirect(url_for("requirements_pool"))
+
+    title = request.form.get("title", "").strip()
+    content = request.form.get("content", "").strip()
+    if not title or not content:
+        flash("需求标题和需求内容不能为空。", "danger")
+        return redirect(url_for("requirement_detail", requirement_id=requirement_id))
+
+    priority = request.form.get("priority", requirement.get("priority", "P1")).strip().upper()
+    status = request.form.get("status", requirement.get("status", "待分析")).strip()
+    requirement["title"] = title[:200]
+    requirement["content"] = content
+    requirement["priority"] = priority if priority in PRIORITIES else requirement.get("priority", "P1")
+    requirement["status"] = status if status in REQUIREMENT_STATUSES else requirement.get("status", "待分析")
+    requirement["source"] = request.form.get("source", requirement.get("source", "")).strip()
+    requirement["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _save_requirements(requirements)
+    flash("需求已更新。", "success")
+    return redirect(url_for("requirement_detail", requirement_id=requirement_id))
+
+
+@app.route("/requirements/<requirement_id>/delete", methods=["POST"])
+def delete_requirement(requirement_id: str):
+    requirements, requirement = _find_requirement(requirement_id)
+    if not requirement:
+        flash("需求不存在。", "warning")
+        return redirect(url_for("requirements_pool"))
+    remaining = [item for item in requirements if item.get("id") != requirement_id]
+    _save_requirements(remaining)
+    flash(f"已删除需求「{requirement.get('title', '')}」。", "success")
+    return redirect(url_for("requirements_pool"))
 
 
 @app.route("/api/requirements/<requirement_id>/split", methods=["POST"])
@@ -403,42 +528,112 @@ def api_split_requirement(requirement_id: str):
 
 
 @app.route(
+    "/api/requirements/<requirement_id>/features/<feature_id>/case-points",
+    methods=["POST"],
+)
+def api_generate_case_points(requirement_id: str, feature_id: str):
+    """Stage 2: expand one feature point into reviewable test points (Case 点)."""
+    requirements, requirement = _find_requirement(requirement_id)
+    if not requirement:
+        return _json_response({"error": "需求不存在"}, 404)
+    feature_point = _find_feature_point(requirement, feature_id)
+    if not feature_point:
+        return _json_response({"error": "功能点不存在"}, 404)
+
+    dependency_ids = {
+        str(item.get("requirement_id", "")).strip()
+        for item in feature_point.get("requirement_dependencies", []) or []
+        if isinstance(item, dict)
+    }
+    related = [item for item in requirements if item.get("id") in dependency_ids]
+
+    try:
+        points = generate_case_points(requirement, feature_point, related)
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        feature_point["case_points"] = points
+        feature_point["case_points_updated_at"] = now
+        requirement["updated_at"] = now
+        _save_requirements(requirements)
+        return _json_response({"case_points": points, "count": len(points)})
+    except ValueError as e:
+        logger.warning("Case point generation failed: %s", e)
+        return _json_response({"error": str(e)}, 400)
+    except Exception as e:
+        logger.exception("Case point generation failed")
+        return _json_response({"error": f"生成 Case 点失败：{e}"}, 500)
+
+
+@app.route(
+    "/api/requirements/<requirement_id>/features/<feature_id>/case-points/<case_point_id>",
+    methods=["DELETE"],
+)
+def api_delete_case_point(requirement_id: str, feature_id: str, case_point_id: str):
+    """Drop one reviewed-out test point before generating cases."""
+    requirements, requirement = _find_requirement(requirement_id)
+    if not requirement:
+        return _json_response({"error": "需求不存在"}, 404)
+    feature_point = _find_feature_point(requirement, feature_id)
+    if not feature_point:
+        return _json_response({"error": "功能点不存在"}, 404)
+
+    points = feature_point.get("case_points") or []
+    remaining = [point for point in points if point.get("id") != case_point_id]
+    if len(remaining) == len(points):
+        return _json_response({"error": "Case 点不存在"}, 404)
+    feature_point["case_points"] = remaining
+    requirement["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _save_requirements(requirements)
+    return _json_response({"count": len(remaining)})
+
+
+@app.route(
     "/api/requirements/<requirement_id>/features/<feature_id>/generate-cases",
     methods=["POST"],
 )
 def api_generate_feature_cases(requirement_id: str, feature_id: str):
-    """Generate and persist a focused test suite for one feature point."""
+    """Stage 3: generate and persist a focused test suite for one feature point."""
     requirements, requirement = _find_requirement(requirement_id)
     if not requirement:
         return _json_response({"error": "需求不存在"}, 404)
 
-    feature_point = next(
-        (
-            point for point in requirement.get("feature_points", [])
-            if isinstance(point, dict) and point.get("id") == feature_id
-        ),
-        None,
-    )
+    feature_point = _find_feature_point(requirement, feature_id)
     if not feature_point:
         return _json_response({"error": "功能点不存在"}, 404)
+
+    case_point_count = len([
+        point for point in (feature_point.get("case_points") or []) if isinstance(point, dict)
+    ])
+    # 已评审过 Case 点时，用例规模按测试点数量放大（每个测试点 1~2 条）。
+    target_count = max(12, min(case_point_count * 2, 60)) if case_point_count else 12
+    min_count = max(6, case_point_count) if case_point_count else 6
 
     try:
         source_text = _feature_point_requirement_text(
             requirement, feature_point, requirements
         )
         test_cases = generate_test_cases(
-            source_text, target_count=12, min_count=6
+            source_text, target_count=target_count, min_count=min_count
         )
-        run = _store_test_case_run(test_cases)
+        run = _store_test_case_run(
+            test_cases,
+            requirement_text=source_text,
+            requirement_source=f"{requirement.get('title', '')} / {feature_point.get('name', '')}",
+        )
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         feature_point["test_case_run_id"] = run["run_id"]
         feature_point["test_case_count"] = len(test_cases)
         feature_point["test_cases_updated_at"] = now
         requirement["updated_at"] = now
         _save_requirements(requirements)
+        _remember_run_origin(
+            requirement_id=requirement_id,
+            requirement_title=requirement.get("title", ""),
+            feature_id=feature_id,
+        )
         return _json_response({
             "run_id": run["run_id"],
             "count": len(test_cases),
+            "case_point_count": case_point_count,
             "redirect": url_for("results"),
         })
     except ValueError as e:
@@ -464,6 +659,179 @@ def api_update_requirement_status(requirement_id: str):
     return _json_response({"status": status})
 
 
+@app.route("/case-points")
+def case_points_overview():
+    """Stage 2 workspace: every split feature point and its reviewed test points."""
+    requirements = sorted(
+        _load_requirements(), key=lambda item: item.get("updated_at", ""), reverse=True
+    )
+    split_requirements = [item for item in requirements if item.get("feature_points")]
+    selected_id = request.args.get("requirement", "").strip()
+    selected = next(
+        (item for item in split_requirements if item.get("id") == selected_id),
+        split_requirements[0] if split_requirements else None,
+    )
+    totals = {
+        "requirements": len(split_requirements),
+        "features": sum(len(item.get("feature_points") or []) for item in split_requirements),
+        "case_points": sum(
+            len(point.get("case_points") or [])
+            for item in split_requirements
+            for point in (item.get("feature_points") or [])
+        ),
+        "pending": sum(
+            1
+            for item in split_requirements
+            for point in (item.get("feature_points") or [])
+            if not (point.get("case_points") or [])
+        ),
+    }
+    return render_template(
+        "case_points.html",
+        requirements=split_requirements,
+        selected=selected,
+        totals=totals,
+        unsplit_count=len(requirements) - len(split_requirements),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 用例集（测试资产）
+# ---------------------------------------------------------------------------
+
+@app.route("/case-sets")
+def case_set_list():
+    return render_template("case_sets.html", case_set_list=case_sets.list_sets())
+
+
+@app.route("/case-sets", methods=["POST"])
+def create_case_set():
+    try:
+        record = case_sets.create_set(
+            request.form.get("name", ""),
+            request.form.get("description", ""),
+        )
+    except ValueError as e:
+        flash(str(e), "danger")
+        return redirect(url_for("case_set_list"))
+    flash(f"用例集「{record['name']}」已创建。", "success")
+    return redirect(url_for("case_set_detail", set_id=record["id"]))
+
+
+@app.route("/case-sets/<set_id>")
+def case_set_detail(set_id: str):
+    record = case_sets.get_set(set_id)
+    if not record:
+        flash("用例集不存在。", "warning")
+        return redirect(url_for("case_set_list"))
+    return render_template("case_set_detail.html", case_set=record)
+
+
+@app.route("/case-sets/<set_id>/update", methods=["POST"])
+def update_case_set(set_id: str):
+    try:
+        record = case_sets.update_set(
+            set_id,
+            name=request.form.get("name", ""),
+            description=request.form.get("description", ""),
+        )
+    except ValueError as e:
+        flash(str(e), "danger")
+        return redirect(url_for("case_set_detail", set_id=set_id))
+    if not record:
+        flash("用例集不存在。", "warning")
+        return redirect(url_for("case_set_list"))
+    flash("用例集已更新。", "success")
+    return redirect(url_for("case_set_detail", set_id=set_id))
+
+
+@app.route("/case-sets/<set_id>/delete", methods=["POST"])
+def delete_case_set(set_id: str):
+    if not case_sets.delete_set(set_id):
+        flash("用例集不存在。", "warning")
+    else:
+        flash("用例集已删除。", "success")
+    return redirect(url_for("case_set_list"))
+
+
+@app.route("/api/case-sets", methods=["GET"])
+def api_list_case_sets():
+    return _json_response({"case_sets": case_sets.list_sets()})
+
+
+@app.route("/api/case-sets/<set_id>/cases", methods=["POST"])
+def api_add_cases_to_set(set_id: str):
+    """Append selected cases from the active run into a case set."""
+    data = request.get_json(silent=True) or {}
+    case_ids = {str(value).strip() for value in data.get("case_ids", []) if str(value).strip()}
+    run = _load_run(session.get("run_id"))
+    if not run or not run.get("test_cases"):
+        return _json_response({"error": "没有可保存的测试用例，请先生成。"}, 400)
+
+    selected = [
+        case for case in run["test_cases"]
+        if not case_ids or str(case.get("id", "")) in case_ids
+    ]
+    if not selected:
+        return _json_response({"error": "请至少选择一条测试用例。"}, 400)
+
+    origin = session.get("run_origin") or {}
+    result = case_sets.add_cases(
+        set_id,
+        selected,
+        source_run_id=session.get("run_id", ""),
+        source_requirement_id=origin.get("requirement_id", ""),
+        source_requirement_title=origin.get("requirement_title", ""),
+        source_feature_id=origin.get("feature_id", ""),
+    )
+    if result is None:
+        return _json_response({"error": "用例集不存在"}, 404)
+    return _json_response({
+        "added": result["added"],
+        "skipped": result["skipped"],
+        "total": result["total"],
+        "set_id": set_id,
+        "set_name": result["set"].get("name", ""),
+        "redirect": url_for("case_set_detail", set_id=set_id),
+    })
+
+
+@app.route("/api/case-sets", methods=["POST"])
+def api_create_case_set():
+    """Create a case set inline (used by the '保存到用例集' dialog)."""
+    data = request.get_json(silent=True) or {}
+    try:
+        record = case_sets.create_set(data.get("name", ""), data.get("description", ""))
+    except ValueError as e:
+        return _json_response({"error": str(e)}, 400)
+    return _json_response({"id": record["id"], "name": record["name"]})
+
+
+@app.route("/api/case-sets/<set_id>/cases/remove", methods=["POST"])
+def api_remove_cases_from_set(set_id: str):
+    data = request.get_json(silent=True) or {}
+    result = case_sets.remove_cases(set_id, data.get("case_ids", []))
+    if result is None:
+        return _json_response({"error": "用例集不存在"}, 404)
+    return _json_response({"removed": result["removed"], "total": result["total"]})
+
+
+@app.route("/case-sets/<set_id>/download/<fmt>")
+def download_case_set(set_id: str, fmt: str):
+    record = case_sets.get_set(set_id)
+    if not record or not record.get("cases"):
+        flash("用例集为空，无法导出。", "warning")
+        return redirect(url_for("case_set_detail", set_id=set_id))
+    if fmt not in {"excel", "markdown"}:
+        flash("不支持的导出格式。", "warning")
+        return redirect(url_for("case_set_detail", set_id=set_id))
+    path = _make_export(record["cases"], fmt)
+    extension = "xlsx" if fmt == "excel" else "md"
+    return send_file(
+        path, as_attachment=True, download_name=f"{record['name']}.{extension}"
+    )
+
+
 @app.route("/configure", methods=["GET", "POST"])
 def configure():
     if request.method == "POST":
@@ -486,6 +854,40 @@ def configure():
         config=config,
         provider_defaults=PROVIDER_DEFAULTS,
     )
+
+
+def _archive_uploaded_requirement(text: str, source: str | None) -> dict | None:
+    """Save an uploaded/imported requirement document into the requirement pool.
+
+    上传的需求文档以前只作为一次性输入，生成完就丢失；现在统一入池，
+    可以继续走「需求拆分 → Case 点 → 用例」的流程。同一份文档重复上传时复用已有记录。
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    source = (source or "").strip()
+    title = _title_from_document(text)
+    try:
+        requirements = _load_requirements()
+        for item in requirements:
+            if item.get("content", "").strip() == text:
+                item["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                _save_requirements(requirements)
+                return item
+        is_url = source.startswith("http://") or source.startswith("https://")
+        requirement = _new_requirement(
+            title,
+            text,
+            source=("飞书文档" if is_url else (source or "文档上传")),
+            source_url=source if is_url else "",
+        )
+        requirements.append(requirement)
+        _save_requirements(requirements)
+        return requirement
+    except OSError:
+        # 需求池落盘失败不应该阻断用例生成主流程。
+        logger.exception("Failed to archive uploaded requirement")
+        return None
 
 
 @app.route("/generate", methods=["POST"])
@@ -543,6 +945,11 @@ def generate():
             structure = analyze_code(code_path_input)
             code_structure_text = structure.to_text()
 
+        # --- 上传的需求一律沉淀进需求池，避免"生成完就丢" ---
+        saved_requirement = _archive_uploaded_requirement(
+            requirements_text, requirement_source
+        )
+
         # --- Generate test cases ---
         test_cases = generate_test_cases(requirements_text, code_structure_text)
 
@@ -565,6 +972,19 @@ def generate():
         )
         session["run_id"] = run_id
         session["feishu_doc_url"] = feishu_doc_url
+        if saved_requirement:
+            saved_requirement_list, stored = _find_requirement(saved_requirement["id"])
+            if stored:
+                stored["test_case_run_id"] = run_id
+                stored["test_case_count"] = len(test_cases)
+                stored["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                _save_requirements(saved_requirement_list)
+            _remember_run_origin(
+                requirement_id=saved_requirement["id"],
+                requirement_title=saved_requirement.get("title", ""),
+            )
+        else:
+            _remember_run_origin()
 
         return redirect(url_for("results"))
 
@@ -586,7 +1006,14 @@ def results():
         flash("No test cases to display. Please generate first.", "warning")
         return redirect(url_for("index"))
     feishu_doc_url = (run.get("feishu_doc_url") or session.get("feishu_doc_url", "")) if run else ""
-    return render_template("results.html", test_cases=test_cases, feishu_doc_url=feishu_doc_url, excel_path="")
+    return render_template(
+        "results.html",
+        test_cases=test_cases,
+        feishu_doc_url=feishu_doc_url,
+        excel_path="",
+        case_set_list=case_sets.list_sets(),
+        run_origin=session.get("run_origin") or {},
+    )
 
 
 @app.route("/run-test")
@@ -742,11 +1169,14 @@ def history_detail(run_id: str):
     # Make this run the active one so download / feishu / regenerate act on it.
     session["run_id"] = run_id
     session["feishu_doc_url"] = run.get("feishu_doc_url", "")
+    session.pop("run_origin", None)
     return render_template(
         "results.html",
         test_cases=run["test_cases"],
         feishu_doc_url=run.get("feishu_doc_url", ""),
         excel_path="",
+        case_set_list=case_sets.list_sets(),
+        run_origin={},
     )
 
 
@@ -829,4 +1259,7 @@ def _detect_dir_type(dirpath, frontend_markers, backend_markers):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=8899)
+    # 调试器默认关闭：debug=True 会暴露 Werkzeug 交互式控制台，
+    # 监听 0.0.0.0 时等于对同网段开放远程代码执行。本地排查用 FLASK_DEBUG=1 显式打开。
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, host="0.0.0.0", port=8899)

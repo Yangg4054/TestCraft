@@ -28,6 +28,32 @@ FEATURE_SPLIT_PROMPT = """你是一名资深产品测试分析师。请将当前
 """
 
 
+CASE_POINT_PROMPT = """你是一名资深测试架构师。请把一个功能点展开为「测试点（Case 点）」清单——它是功能点和最终测试用例之间的设计中间层。
+
+测试点的定义：一个测试点描述"要验证什么"以及"用什么测试方法验证"，但不写具体步骤和数据。一个测试点后续会展开成 1~3 条测试用例。
+
+拆解规则：
+1. 逐条扫描功能点的主流程、异常流程、业务规则、数据变化、验收标准、前置条件、参与角色和依赖，每一项至少产出一个测试点，不得遗漏。
+2. 覆盖这些维度：正常流程、反向/校验、边界值、等价类、状态迁移、权限与角色、数据一致性、并发与幂等、异常与容错、集成依赖、性能与安全（仅在需求确实涉及时）。
+3. 每个测试点只聚焦一个验证目标，命名要具体，禁止"功能正常""流程验证"这类空泛表述。
+4. method 必须从测试设计方法中选择，体现该测试点的设计依据。
+5. source 说明该测试点来自功能点的哪一条（如"业务规则2""主流程步骤3""异常流程1"），便于追溯覆盖率。
+6. 不要凭空发明需求中不存在的业务规则；不确定的写进 notes。
+
+只返回 JSON 对象，不要返回 Markdown：
+{"case_points":[{"id":"CP-001","name":"测试点名称","category":"正常流程|反向校验|边界值|状态迁移|权限控制|数据一致性|并发幂等|异常容错|集成依赖|性能|安全|兼容性","priority":"P0|P1|P2|P3","intent":"要验证的目标，一句话说清","method":"等价类|边界值|因果图|判定表|正交排列|错误推算|场景法","conditions":["触发条件或输入前提"],"verify_points":["需要断言的具体结果"],"source":"来源于功能点的哪一条","notes":"待确认项，可为空"}]}
+"""
+
+CASE_POINT_CATEGORIES = (
+    "正常流程", "反向校验", "边界值", "状态迁移", "权限控制", "数据一致性",
+    "并发幂等", "异常容错", "集成依赖", "性能", "安全", "兼容性",
+)
+
+TEST_METHODS = (
+    "等价类", "边界值", "因果图", "判定表", "正交排列", "错误推算", "场景法",
+)
+
+
 def call_llm(system_prompt: str, user_content: str) -> str:
     """Call the configured LLM and return the raw text response."""
     config = load_config()
@@ -103,6 +129,116 @@ def split_requirement(
     for index, point in enumerate(parsed, 1):
         point["id"] = f"FP-{index:03d}"
     return parsed
+
+
+def generate_case_points(
+    requirement: dict,
+    feature_point: dict,
+    related_requirements: list[dict] | None = None,
+) -> list[dict]:
+    """Expand one feature point into a list of test points (Case 点).
+
+    This is stage 2 of the design flow: 需求拆分 -> 生成 Case 点 -> 生成测试用例.
+    """
+    if not isinstance(feature_point, dict) or not str(feature_point.get("name", "")).strip():
+        raise ValueError("功能点内容为空，无法生成 Case 点。")
+
+    payload = {
+        "requirement": {
+            "id": requirement.get("id", ""),
+            "title": requirement.get("title", ""),
+            "content": str(requirement.get("content", ""))[:8000],
+        },
+        "feature_point": feature_point,
+        "dependency_requirements": [
+            {
+                "id": item.get("id", ""),
+                "title": item.get("title", ""),
+                "content": str(item.get("content", ""))[:2000],
+            }
+            for item in (related_requirements or [])
+        ],
+    }
+    user_content = (
+        "## 功能点上下文\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)[:24000]
+        + "\n\n请先列出该功能点需要覆盖的所有验证维度，再输出测试点。"
+        "通常输出 6~15 个测试点；功能点确实简单时可以少输出，但主流程、异常和边界必须齐全。"
+    )
+    return _parse_case_points(call_llm(CASE_POINT_PROMPT, user_content))
+
+
+def _parse_case_points(content: str) -> list[dict]:
+    """Parse and normalize a case-point response into a stable shape."""
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("AI 未返回 Case 点内容，请重试。")
+    text = re.sub(r"```(?:json)?\s*\n?", "", content).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("AI 返回的 Case 点不是有效 JSON，请重试。")
+        try:
+            parsed = json.loads(text[start:end + 1])
+        except json.JSONDecodeError as exc:
+            raise ValueError("AI 返回的 Case 点不是有效 JSON，请重试。") from exc
+
+    if isinstance(parsed, dict):
+        points = (
+            parsed.get("case_points")
+            or parsed.get("casePoints")
+            or parsed.get("test_points")
+            or parsed.get("points")
+        )
+        if points is None and "name" in parsed:
+            points = [parsed]
+    elif isinstance(parsed, list):
+        points = parsed
+    else:
+        points = None
+    if not isinstance(points, list):
+        raise ValueError("AI 返回中缺少 case_points 数组，请重试。")
+
+    normalized = []
+    for index, point in enumerate(points, 1):
+        if not isinstance(point, dict):
+            continue
+        name = str(point.get("name", point.get("title", ""))).strip()
+        if not name:
+            continue
+        normalized.append({
+            "id": f"CP-{index:03d}",
+            "name": name,
+            "category": _normalize_case_point_category(point.get("category", "")),
+            "priority": _normalize_priority(point.get("priority", "P1")),
+            "intent": str(point.get("intent", point.get("description", ""))).strip(),
+            "method": _normalize_method(point.get("method", "")),
+            "conditions": _as_string_list(
+                point.get("conditions", point.get("preconditions", []))
+            ),
+            "verify_points": _as_string_list(
+                point.get("verify_points", point.get("verifyPoints", point.get("expected", [])))
+            ),
+            "source": str(point.get("source", "")).strip(),
+            "notes": str(point.get("notes", "")).strip(),
+        })
+    if not normalized:
+        raise ValueError("AI 未生成有效 Case 点，请重试。")
+    return normalized
+
+
+def _normalize_case_point_category(value) -> str:
+    category = str(value or "").strip()
+    return category if category in CASE_POINT_CATEGORIES else "正常流程"
+
+
+def _normalize_method(value) -> str:
+    method = str(value or "").strip()
+    for known in TEST_METHODS:
+        if known and known in method:
+            return known
+    return "场景法"
 
 
 def _build_requirement_history_context(requirements: list[dict]) -> str:

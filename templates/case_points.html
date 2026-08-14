@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block title %}TestCraft — 生成 Case 点{% endblock %}
+
+{% block content %}
+<div class="page-heading d-flex justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <div class="eyebrow">STEP 2 · 生成 Case 点</div>
+        <h1 class="h3 mb-1">Case 点工作台</h1>
+        <p class="text-muted mb-0">把功能点展开成可评审的测试点：只描述"验证什么、用什么方法"，评审通过后再落成测试用例。</p>
+    </div>
+    <a class="btn btn-outline-primary" href="{{ url_for('requirements_pool') }}"><i class="bi bi-arrow-left me-1"></i>回到需求拆分</a>
+</div>
+
+<div class="flow-steps">
+    <a class="flow-step" href="{{ url_for('requirements_pool') }}">
+        <span class="step-index">1</span>
+        <span><strong>需求拆分</strong><small>录入需求 · AI 拆功能点</small></span>
+    </a>
+    <a class="flow-step current" href="{{ url_for('case_points_overview') }}">
+        <span class="step-index">2</span>
+        <span><strong>生成 Case 点</strong><small>功能点展开测试点</small></span>
+    </a>
+    <a class="flow-step" href="{{ url_for('index') }}">
+        <span class="step-index">3</span>
+        <span><strong>生成测试用例</strong><small>测试点落成可执行用例</small></span>
+    </a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3"><div class="metric-strip"><span class="metric-label">已拆分需求</span><strong>{{ totals.requirements }}</strong><i class="bi bi-inbox"></i></div></div>
+    <div class="col-6 col-lg-3"><div class="metric-strip"><span class="metric-label">功能点</span><strong>{{ totals.features }}</strong><i class="bi bi-grid-1x2"></i></div></div>
+    <div class="col-6 col-lg-3"><div class="metric-strip tone-success"><span class="metric-label">Case 点</span><strong>{{ totals.case_points }}</strong><i class="bi bi-diagram-2"></i></div></div>
+    <div class="col-6 col-lg-3"><div class="metric-strip tone-warning"><span class="metric-label">待生成功能点</span><strong>{{ totals.pending }}</strong><i class="bi bi-hourglass-split"></i></div></div>
+</div>
+
+{% if not requirements %}
+<div class="surface-card">
+    <div class="empty-state">
+        <i class="bi bi-diagram-2"></i>
+        <h3>还没有可展开的功能点</h3>
+        <p>Case 点来自第一步拆出的功能点。{% if unsplit_count %}需求池里有 {{ unsplit_count }} 条需求还没拆分。{% endif %}</p>
+        <a class="btn btn-primary" href="{{ url_for('requirements_pool') }}"><i class="bi bi-diagram-3 me-1"></i>去拆分需求</a>
+    </div>
+</div>
+{% else %}
+<div class="row g-4">
+    <div class="col-xl-3">
+        <section class="detail-section">
+            <div class="section-kicker mb-3">选择需求</div>
+            <div class="requirement-switch">
+                {% for item in requirements %}
+                {% set counter = namespace(case_points=0, covered=0) %}
+                {% for point in item.feature_points %}
+                    {% set counter.case_points = counter.case_points + (point.case_points|default([])|length) %}
+                    {% if point.case_points %}{% set counter.covered = counter.covered + 1 %}{% endif %}
+                {% endfor %}
+                <a href="{{ url_for('case_points_overview', requirement=item.id) }}" class="{% if selected and selected.id == item.id %}active{% endif %}">
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ item.feature_points|length }} 功能点 · {{ counter.case_points }} Case 点</small>
+                    <div class="coverage-bar"><span style="width: {{ (counter.covered / item.feature_points|length * 100) | round | int if item.feature_points else 0 }}%"></span></div>
+                </a>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+
+    <div class="col-xl-9">
+        {% if selected %}
+        <section class="detail-section">
+            <div class="d-flex justify-content-between align-items-center mb-3 gap-2 flex-wrap">
+                <div>
+                    <div class="section-kicker">当前需求</div>
+                    <h2 class="h5 mb-0">{{ selected.title }}</h2>
+                </div>
+                <div class="d-flex gap-2 flex-wrap">
+                    <button class="btn btn-primary" id="batchBtn" onclick="generateAllCasePoints(this)"><i class="bi bi-lightning-charge me-1"></i>为未生成的功能点批量生成</button>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('requirement_detail', requirement_id=selected.id) }}"><i class="bi bi-file-text me-1"></i>查看需求详情</a>
+                </div>
+            </div>
+
+            <div id="featurePoints">
+                {% for point in selected.feature_points %}{% include '_feature_point.html' %}{% endfor %}
+            </div>
+        </section>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const requirementId = {{ (selected.id if selected else '') | tojson }};
+
+function renderCasePoint(featureId, point) {
+    const detail = [
+        (point.conditions || []).length ? `<div><b>触发条件：</b>${tcEscape(point.conditions.join('；'))}</div>` : '',
+        (point.verify_points || []).length ? `<div><b>验证点：</b>${tcEscape(point.verify_points.join('；'))}</div>` : '',
+        point.notes ? `<div><b>待确认：</b>${tcEscape(point.notes)}</div>` : '',
+    ].filter(Boolean).join('');
+    return `<div class="case-point" data-case-point-id="${tcEscape(point.id)}">
+        <span class="case-point-id">${tcEscape(point.id)}</span>
+        <div class="case-point-body">
+            <span class="case-point-name">${tcEscape(point.name)}</span>
+            ${point.intent ? `<p class="case-point-intent">${tcEscape(point.intent)}</p>` : ''}
+            <div class="case-point-meta">
+                <span class="cat-chip cat-${tcEscape(point.category)}">${tcEscape(point.category)}</span>
+                <span class="tag-chip">${tcEscape(point.method)}</span>
+                ${point.source ? `<span class="tag-chip">来源：${tcEscape(point.source)}</span>` : ''}
+            </div>
+            ${detail ? `<div class="case-point-detail">${detail}</div>` : ''}
+        </div>
+        <div class="case-point-side">
+            <span class="badge priority-${tcEscape((point.priority || 'P1').toLowerCase())}">${tcEscape(point.priority || 'P1')}</span>
+            <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" title="删除该测试点" onclick="deleteCasePoint('${tcEscape(featureId)}', '${tcEscape(point.id)}', this)"><i class="bi bi-x-lg"></i></button>
+        </div>
+    </div>`;
+}
+
+function paintCasePoints(featureId, points) {
+    const list = document.querySelector(`[data-case-point-list="${CSS.escape(featureId)}"]`);
+    if (list) list.innerHTML = points.map(cp => renderCasePoint(featureId, cp)).join('');
+    const counter = document.querySelector(`[data-case-point-count="${CSS.escape(featureId)}"]`);
+    if (counter) counter.textContent = `${points.length} 个`;
+}
+
+async function requestCasePoints(featureId) {
+    return tcFetchJson(
+        `/api/requirements/${requirementId}/features/${encodeURIComponent(featureId)}/case-points`,
+        {method: 'POST'}
+    );
+}
+
+async function generateCasePoints(featureId, btn) {
+    const restore = tcBusy(btn, '分析测试点...');
+    try {
+        const data = await requestCasePoints(featureId);
+        paintCasePoints(featureId, data.case_points || []);
+        tcToast(`已生成 ${data.count} 个 Case 点`, 'success');
+        restore();
+        if (btn) btn.innerHTML = '<i class="bi bi-list-nested me-1"></i>重新生成 Case 点';
+    } catch (error) {
+        tcToast('生成 Case 点失败：' + error.message, 'error');
+        restore();
+    }
+}
+
+async function deleteCasePoint(featureId, casePointId, btn) {
+    if (!confirm(`确定删除测试点 ${casePointId}？`)) return;
+    try {
+        const data = await tcFetchJson(
+            `/api/requirements/${requirementId}/features/${encodeURIComponent(featureId)}/case-points/${encodeURIComponent(casePointId)}`,
+            {method: 'DELETE'}
+        );
+        const row = btn.closest('.case-point');
+        if (row) row.remove();
+        const counter = document.querySelector(`[data-case-point-count="${CSS.escape(featureId)}"]`);
+        if (counter) counter.textContent = `${data.count} 个`;
+        tcToast('测试点已删除', 'success');
+    } catch (error) {
+        tcToast('删除失败：' + error.message, 'error');
+    }
+}
+
+async function generateFeatureCases(featureId, btn) {
+    const restore = tcBusy(btn, '生成用例中...');
+    try {
+        const data = await tcFetchJson(
+            `/api/requirements/${requirementId}/features/${encodeURIComponent(featureId)}/generate-cases`,
+            {method: 'POST'}
+        );
+        window.location.href = data.redirect || '/results';
+    } catch (error) {
+        tcToast('生成用例失败：' + error.message, 'error');
+        restore();
+    }
+}
+
+// 批量生成：只处理还没有 Case 点的功能点，串行执行避免打爆大模型限流
+async function generateAllCasePoints(btn) {
+    const pending = Array.from(document.querySelectorAll('.feature-point')).filter(node => {
+        const counter = node.querySelector('[data-case-point-count]');
+        return counter && counter.textContent.trim().startsWith('0');
+    });
+    if (!pending.length) {
+        tcToast('所有功能点都已经生成过 Case 点了', 'success');
+        return;
+    }
+    const restore = tcBusy(btn, `批量生成中 0/${pending.length}`);
+    let done = 0;
+    let failed = 0;
+    for (const node of pending) {
+        const featureId = node.dataset.featureId;
+        try {
+            const data = await requestCasePoints(featureId);
+            paintCasePoints(featureId, data.case_points || []);
+        } catch (error) {
+            failed += 1;
+        }
+        done += 1;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>批量生成中 ${done}/${pending.length}`;
+    }
+    restore();
+    tcToast(
+        failed ? `完成 ${done - failed}/${pending.length} 个，${failed} 个失败` : `已为 ${done} 个功能点生成 Case 点`,
+        failed ? 'error' : 'success'
+    );
+}
+</script>
+{% endblock %}

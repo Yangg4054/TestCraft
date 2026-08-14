@@ -70,6 +70,17 @@ CREATE TABLE IF NOT EXISTS test_runs (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_test_runs_created_at ON test_runs (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS case_sets (
+    set_id      TEXT PRIMARY KEY,
+    name        TEXT        NOT NULL,
+    description TEXT        NOT NULL DEFAULT '',
+    cases       JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    case_count  INTEGER     NOT NULL DEFAULT 0,
+    created_at  TEXT        NOT NULL DEFAULT '',
+    updated_at  TEXT        NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_case_sets_updated_at ON case_sets (updated_at DESC);
 """
 
 
@@ -168,3 +179,83 @@ def update_feishu_url(run_id: str, url: str) -> None:
             "UPDATE test_runs SET feishu_doc_url = %s WHERE run_id = %s",
             (url, run_id),
         )
+
+
+# --- 用例集（case_sets）---------------------------------------------------
+# 记录形状与 case_sets.py 的文件后端保持一致，两种后端可无缝互换。
+
+def save_case_set(record: dict) -> None:
+    """插入或整体覆盖一个用例集。"""
+    cases = record.get("cases") or []
+    with _get_pool().connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO case_sets (
+                set_id, name, description, cases, case_count, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (set_id) DO UPDATE SET
+                name        = EXCLUDED.name,
+                description = EXCLUDED.description,
+                cases       = EXCLUDED.cases,
+                case_count  = EXCLUDED.case_count,
+                updated_at  = EXCLUDED.updated_at
+            """,
+            (
+                record.get("id"),
+                record.get("name", ""),
+                record.get("description", ""),
+                Jsonb(cases),
+                len(cases),
+                record.get("created_at", ""),
+                record.get("updated_at", ""),
+            ),
+        )
+
+
+def get_case_set(set_id: str) -> dict | None:
+    with _get_pool().connection() as conn:
+        row = conn.execute(
+            """
+            SELECT set_id, name, description, cases, created_at, updated_at
+            FROM case_sets WHERE set_id = %s
+            """,
+            (set_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "name": row[1],
+        "description": row[2],
+        "cases": row[3] or [],
+        "created_at": row[4],
+        "updated_at": row[5],
+    }
+
+
+def list_case_sets(limit: int = 200) -> list[dict]:
+    with _get_pool().connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT set_id, name, description, case_count, created_at, updated_at
+            FROM case_sets ORDER BY updated_at DESC LIMIT %s
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "name": r[1],
+            "description": r[2],
+            "case_count": r[3],
+            "created_at": r[4],
+            "updated_at": r[5],
+        }
+        for r in rows
+    ]
+
+
+def delete_case_set(set_id: str) -> bool:
+    with _get_pool().connection() as conn:
+        result = conn.execute("DELETE FROM case_sets WHERE set_id = %s", (set_id,))
+    return bool(result.rowcount)
