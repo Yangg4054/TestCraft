@@ -2,10 +2,15 @@
     <div class="feature-point-head">
         <span class="feature-id">{{ point.id }}</span>
         <h3>{{ point.name }}</h3>
-        <span class="badge priority-{{ point.priority|default('P1')|lower }} ms-auto">{{ point.priority|default('P1') }}</span>
-        <button class="btn btn-sm btn-outline-primary feature-case-btn" type="button" onclick="generateFeatureCases('{{ point.id }}', this)" title="根据此功能点生成测试用例">
-            <i class="bi bi-list-check me-1"></i>生成用例
-        </button>
+        <span class="badge priority-{{ point.priority|default('P1')|lower }}">{{ point.priority|default('P1') }}</span>
+        <div class="feature-actions">
+            <button class="btn btn-sm btn-outline-primary" type="button" onclick="generateCasePoints('{{ point.id }}', this)" title="第二步：把功能点展开为测试点">
+                <i class="bi bi-list-nested me-1"></i>{% if point.case_points %}重新生成 Case 点{% else %}生成 Case 点{% endif %}
+            </button>
+            <button class="btn btn-sm btn-outline-secondary feature-case-btn" type="button" onclick="generateFeatureCases('{{ point.id }}', this)" title="第三步：根据测试点生成可执行用例">
+                <i class="bi bi-list-check me-1"></i>生成用例
+            </button>
+        </div>
     </div>
     <p>{{ point.description }}</p>
 
@@ -41,6 +46,43 @@
         {% endfor %}
     </div>
     {% endif %}
+
+    <div class="case-point-block" data-case-point-block="{{ point.id }}">
+        <div class="case-point-block-head">
+            <span class="feature-label"><i class="bi bi-diagram-2 me-1"></i>Case 点（测试点）</span>
+            <span class="tag-chip tone-brand" data-case-point-count="{{ point.id }}">{{ point.case_points|default([])|length }} 个</span>
+            {% if point.case_points_updated_at %}<span class="text-muted small ms-auto">{{ point.case_points_updated_at }}</span>{% endif %}
+        </div>
+        <div class="case-point-list" data-case-point-list="{{ point.id }}">
+            {% for case_point in point.case_points|default([]) %}
+            <div class="case-point" data-case-point-id="{{ case_point.id }}">
+                <span class="case-point-id">{{ case_point.id }}</span>
+                <div class="case-point-body">
+                    <span class="case-point-name">{{ case_point.name }}</span>
+                    {% if case_point.intent %}<p class="case-point-intent">{{ case_point.intent }}</p>{% endif %}
+                    <div class="case-point-meta">
+                        <span class="cat-chip cat-{{ case_point.category }}">{{ case_point.category }}</span>
+                        <span class="tag-chip">{{ case_point.method }}</span>
+                        {% if case_point.source %}<span class="tag-chip">来源：{{ case_point.source }}</span>{% endif %}
+                    </div>
+                    {% if case_point.conditions or case_point.verify_points %}
+                    <div class="case-point-detail">
+                        {% if case_point.conditions %}<div><b>触发条件：</b>{{ case_point.conditions|join('；') }}</div>{% endif %}
+                        {% if case_point.verify_points %}<div><b>验证点：</b>{{ case_point.verify_points|join('；') }}</div>{% endif %}
+                        {% if case_point.notes %}<div><b>待确认：</b>{{ case_point.notes }}</div>{% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="case-point-side">
+                    <span class="badge priority-{{ case_point.priority|default('P1')|lower }}">{{ case_point.priority|default('P1') }}</span>
+                    <button class="btn btn-sm btn-outline-secondary btn-icon" type="button" title="删除该测试点" onclick="deleteCasePoint('{{ point.id }}', '{{ case_point.id }}', this)"><i class="bi bi-x-lg"></i></button>
+                </div>
+            </div>
+            {% else %}
+            <div class="text-muted small">还没有 Case 点。点击上方「生成 Case 点」把这个功能点展开成可评审的测试点。</div>
+            {% endfor %}
+        </div>
+    </div>
 
     {% if point.test_case_run_id %}
     <div class="feature-case-result">

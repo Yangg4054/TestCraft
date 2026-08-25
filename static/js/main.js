@@ -1,5 +1,50 @@
 /* TestCraft main.js */
 
+// 轻量 toast：替代打断式 alert()，成功/失败反馈统一走这里
+function tcToast(message, type) {
+    const host = document.getElementById('tcToastHost');
+    if (!host) { alert(message); return; }
+    const node = document.createElement('div');
+    node.className = 'tc-toast' + (type ? ' is-' + type : '');
+    const icon = type === 'error' ? 'bi-exclamation-octagon' : (type === 'success' ? 'bi-check-circle' : 'bi-info-circle');
+    node.innerHTML = '<i class="bi ' + icon + '"></i><span></span>';
+    node.querySelector('span').textContent = message;
+    host.appendChild(node);
+    setTimeout(function () {
+        node.classList.add('is-hiding');
+        setTimeout(function () { node.remove(); }, 200);
+    }, type === 'error' ? 5200 : 3200);
+}
+
+// 统一的 JSON 请求封装，服务端错误直接抛出便于 catch 后 toast
+async function tcFetchJson(url, options) {
+    const resp = await fetch(url, options || {});
+    let data = {};
+    try { data = await resp.json(); } catch (e) { data = {}; }
+    if (!resp.ok || data.error) {
+        throw new Error(data.error || ('请求失败（HTTP ' + resp.status + '）'));
+    }
+    return data;
+}
+
+// 按钮加载态，避免每个页面各写一份
+function tcBusy(btn, label) {
+    if (!btn) return function () {};
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>' + (label || '处理中...');
+    return function restore() {
+        btn.disabled = false;
+        btn.innerHTML = original;
+    };
+}
+
+function tcEscape(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+}
+
 // Theme toggle
 (function () {
     const html = document.documentElement;

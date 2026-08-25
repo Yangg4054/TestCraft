@@ -33,12 +33,12 @@ db.init_db()
 check("init_db 幂等（重复调用不报错）", True)
 db.init_db()
 
-db.save_run("run_test_001", SAMPLE,
+db.save_run("a1b2c3d4e5f6", SAMPLE,
             requirement_text="需求：用户登录功能，支持账号密码登录……",
             requirement_source="login_spec.docx",
             code_structure_text="app/auth.py::login()",
             feishu_doc_url="")
-r = db.get_run("run_test_001")
+r = db.get_run("a1b2c3d4e5f6")
 check("save_run + get_run 往返", r is not None)
 check("case_count 正确", r and r["count"] == 2)
 check("test_cases 反序列化为 list", r and isinstance(r["test_cases"], list))
@@ -48,17 +48,17 @@ check("需求来源已存", r and r["requirement_source"] == "login_spec.docx")
 check("代码结构已存", r and r["code_structure_text"] == "app/auth.py::login()")
 
 lst = db.list_runs()
-check("list_runs 含刚存的 run", any(x["run_id"] == "run_test_001" for x in lst))
+check("list_runs 含刚存的 run", any(x["run_id"] == "a1b2c3d4e5f6" for x in lst))
 check("list_runs 字段形状 run_id/count/time", lst and set(lst[0]) == {"run_id", "count", "time"})
 
-db.update_feishu_url("run_test_001", "https://feishu.cn/docx/XYZ")
-check("update_feishu_url 生效", db.get_run("run_test_001")["feishu_doc_url"] == "https://feishu.cn/docx/XYZ")
+db.update_feishu_url("a1b2c3d4e5f6", "https://feishu.cn/docx/XYZ")
+check("update_feishu_url 生效", db.get_run("a1b2c3d4e5f6")["feishu_doc_url"] == "https://feishu.cn/docx/XYZ")
 
-db.save_run("run_test_001", SAMPLE[:1], requirement_text="覆盖写")
-r2 = db.get_run("run_test_001")
+db.save_run("a1b2c3d4e5f6", SAMPLE[:1], requirement_text="覆盖写")
+r2 = db.get_run("a1b2c3d4e5f6")
 check("同 run_id upsert 覆盖（count 2→1）", r2["count"] == 1)
 check("upsert 更新 requirement_text", r2["requirement_text"] == "覆盖写")
-check("get_run 不存在返回 None", db.get_run("no_such_run") is None)
+check("get_run 不存在返回 None", db.get_run("ffffffffffff") is None)
 
 print("== Flask 路由（无 LLM）==")
 os.environ.setdefault("FLASK_SECRET_KEY", "test")
@@ -67,17 +67,17 @@ import app as flaskapp
 check("app 选中 PG 后端", flaskapp.DB_ENABLED is True)
 client = flaskapp.app.test_client()
 
-flaskapp._store_run("run_ui_001", SAMPLE, requirement_text="req", requirement_source="s.md")
+flaskapp._store_run("0123456789ab", SAMPLE, requirement_text="req", requirement_source="s.md")
 
 resp = client.get("/history")
-check("/history 200 且含 run", resp.status_code == 200 and b"run_ui_001" in resp.data)
+check("/history 200 且含 run", resp.status_code == 200 and b"0123456789ab" in resp.data)
 
-resp = client.get("/history/run_ui_001")
+resp = client.get("/history/0123456789ab")
 check("/history/<id> 200", resp.status_code == 200)
 check("/history/<id> 渲染用例内容", "正常登录".encode() in resp.data)
 
 with client.session_transaction() as s:
-    s["run_id"] = "run_ui_001"
+    s["run_id"] = "0123456789ab"
 
 resp = client.get("/download/excel")
 check("/download/excel 200", resp.status_code == 200)

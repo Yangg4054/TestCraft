@@ -6,7 +6,7 @@
     <title>{% block title %}TestCraft{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-    <link href="{{ url_for('static', filename='css/style.css', v='20260812-sidebar-fix') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/style.css', v='20260814-flow') }}" rel="stylesheet">
 </head>
 <body>
     <button class="mobile-nav-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#workspaceNav" aria-label="打开导航">
@@ -14,18 +14,44 @@
     </button>
     <aside class="workspace-sidebar offcanvas offcanvas-start" tabindex="-1" id="workspaceNav">
         <div class="workspace-brand">
-            <a href="{{ url_for('index') }}" class="text-decoration-none">
+            <a href="{{ url_for('requirements_pool') }}" class="text-decoration-none">
                 <span class="brand-mark"><i class="bi bi-clipboard-check"></i></span>
-                <span>TestCraft</span>
+                <span>TestCraft<span class="brand-sub">Quality Workspace</span></span>
             </a>
         </div>
-        <div class="sidebar-label">工作台</div>
+
+        {# 主菜单严格按测试设计的逻辑顺序：需求拆分 → 生成 Case 点 → 生成测试用例 #}
+        <div class="sidebar-label">测试设计流程</div>
         <nav class="workspace-nav">
-            <a class="workspace-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}"><i class="bi bi-house"></i><span>首页</span></a>
-            <a class="workspace-link {% if request.endpoint in ['requirements_pool', 'requirement_detail'] %}active{% endif %}" href="{{ url_for('requirements_pool') }}"><i class="bi bi-inbox"></i><span>需求池</span></a>
-            <a class="workspace-link {% if request.endpoint in ['history', 'history_detail', 'results'] %}active{% endif %}" href="{{ url_for('history') }}"><i class="bi bi-clock-history"></i><span>历史记录</span></a>
-            <a class="workspace-link {% if request.endpoint in ['autotest', 'run_test'] %}active{% endif %}" href="{{ url_for('autotest') }}"><i class="bi bi-play-circle"></i><span>自动测试</span></a>
+            <a class="workspace-link {% if request.endpoint in ['requirements_pool', 'requirement_detail'] %}active{% endif %}" href="{{ url_for('requirements_pool') }}">
+                <span class="stage-num">1</span><span>需求拆分</span>
+                {% if nav_counts.requirements %}<span class="nav-count">{{ nav_counts.requirements }}</span>{% endif %}
+            </a>
+            <div class="stage-flow-hint"><i class="bi bi-arrow-down"></i><span>拆出功能点后进入下一步</span></div>
+            <a class="workspace-link {% if request.endpoint == 'case_points_overview' %}active{% endif %}" href="{{ url_for('case_points_overview') }}">
+                <span class="stage-num">2</span><span>生成 Case 点</span>
+                {% if nav_counts.case_points %}<span class="nav-count">{{ nav_counts.case_points }}</span>{% endif %}
+            </a>
+            <div class="stage-flow-hint"><i class="bi bi-arrow-down"></i><span>测试点评审通过后生成用例</span></div>
+            <a class="workspace-link {% if request.endpoint in ['index', 'results', 'generate'] %}active{% endif %}" href="{{ url_for('index') }}">
+                <span class="stage-num">3</span><span>生成测试用例</span>
+            </a>
         </nav>
+
+        <div class="sidebar-label">测试资产</div>
+        <nav class="workspace-nav">
+            <a class="workspace-link {% if request.endpoint in ['case_set_list', 'case_set_detail'] %}active{% endif %}" href="{{ url_for('case_set_list') }}">
+                <i class="bi bi-collection"></i><span>用例集</span>
+                {% if nav_counts.case_sets %}<span class="nav-count">{{ nav_counts.case_sets }}</span>{% endif %}
+            </a>
+            <a class="workspace-link {% if request.endpoint in ['history', 'history_detail'] %}active{% endif %}" href="{{ url_for('history') }}">
+                <i class="bi bi-clock-history"></i><span>生成历史</span>
+            </a>
+            <a class="workspace-link {% if request.endpoint in ['autotest', 'run_test'] %}active{% endif %}" href="{{ url_for('autotest') }}">
+                <i class="bi bi-play-circle"></i><span>自动测试</span>
+            </a>
+        </nav>
+
         <div class="sidebar-spacer"></div>
         <div class="sidebar-label">系统</div>
         <nav class="workspace-nav">
@@ -50,8 +76,10 @@
         {% block content %}{% endblock %}
     </main>
 
+    <div class="tc-toast-host" id="tcToastHost"></div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/main.js', v='20260814-flow') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>
